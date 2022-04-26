@@ -16,11 +16,17 @@ type MCStores struct {
 	conversionStore *store.ConversionStore
 }
 
+type MCFile struct {
+	File       mcmodel.File
+	fileHandle *os.File
+	Path       string
+}
+
 type MCHandler struct {
-	User   *mcmodel.User
-	stores *MCStores
-	mu     sync.Mutex
-	file   *os.File
+	User      *mcmodel.User
+	stores    *MCStores
+	mu        sync.Mutex
+	openFiles map[string]MCFile
 }
 
 func NewMCHandler(user *mcmodel.User, stores *MCStores) *MCHandler {
@@ -55,7 +61,7 @@ func (h *MCHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	}
 
 	var err error
-	h.file, err = os.OpenFile("stuff", openFlags, 0777)
+	//h.file, err = os.OpenFile("stuff", openFlags, 0777)
 	if err != nil {
 		return nil, err
 	}
