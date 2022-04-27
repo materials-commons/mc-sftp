@@ -118,6 +118,19 @@ func mcsshdMain(cmd *cobra.Command, args []string) {
 			//sftpMiddleware(),
 		),
 	)
+	s.SubsystemHandlers = make(map[string]ssh.SubsystemHandler)
+	s.SubsystemHandlers["sftp"] = func(s ssh.Session) {
+		fmt.Println("sftp")
+		channel := s
+		root := sftp.InMemHandler()
+		server := sftp.NewRequestServer(channel, root)
+		if err := server.Serve(); err == io.EOF {
+			server.Close()
+			log.Print("sftp client exited session.")
+		} else if err != nil {
+			log.Print("sftp server completed with error:", err)
+		}
+	}
 	if err != nil {
 		log.Fatalln(err)
 	}
