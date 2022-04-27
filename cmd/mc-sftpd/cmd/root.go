@@ -76,24 +76,24 @@ func mcsftpdMain(cmd *cobra.Command, args []string) {
 			// Should use constant-time compare (or better, salt+hash) in
 			// a production setting.
 			fmt.Fprintf(debugStream, "Login: %s\n", c.User())
-			if c.User() == "testuser" && string(pass) == "tiger" {
+			if c.User() == "gtarcea" && string(pass) == "test" {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("password rejected for %q", c.User())
 		},
 	}
 
-	//privateBytes, err := ioutil.ReadFile("id_rsa")
-	//if err != nil {
-	//	log.Fatal("Failed to load private key", err)
-	//}
-	//
-	//private, err := ssh.ParsePrivateKey(privateBytes)
-	//if err != nil {
-	//	log.Fatal("Failed to parse private key", err)
-	//}
-	//
-	//config.AddHostKey(private)
+	privateBytes, err := ioutil.ReadFile("id_rsa")
+	if err != nil {
+		log.Fatal("Failed to load private key", err)
+	}
+
+	private, err := ssh.ParsePrivateKey(privateBytes)
+	if err != nil {
+		log.Fatal("Failed to parse private key", err)
+	}
+
+	config.AddHostKey(private)
 
 	listener, err := net.Listen("tcp", "0.0.0.0:2022")
 	if err != nil {
