@@ -40,11 +40,55 @@ func NewMCFSHandler(db *gorm.DB, root string, mcfsRoot string, user mcmodel.User
 
 // Implement the scp.CopyToClientHandler interface
 
+// Glob Don't support Glob for now...
 func (h *mcfsHandler) Glob(s ssh.Session, pattern string) ([]string, error) {
-	return nil, nil
+	return []string{pattern}, nil
 }
 
 func (h *mcfsHandler) WalkDir(s ssh.Session, path string, fn fs.WalkDirFunc) error {
+	cleanedPath := h.removeSlugProjectNameFromPath(path)
+	d, err := h.fileStore.FindDirByPath(h.project.ID, cleanedPath)
+	if err != nil {
+		err = fn(cleanedPath, nil, err)
+	} else {
+		err = h.walkDir(cleanedPath, d.ToDirEntry(), fn)
+	}
+
+	if err == filepath.SkipDir {
+		return nil
+	}
+
+	return err
+}
+
+func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) error {
+	if err := fn(path, d, nil); err != nil || !d.IsDir() {
+		if err == filepath.SkipDir && d.IsDir() {
+			// Skipped directory
+			err = nil
+		}
+
+		return err
+	}
+
+	dirs, err := h.fileStore.ListDirectoryByPath(h.project.ID, path)
+	if err != nil {
+		err = fn(path, d, err)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, dir := range dirs {
+		p := filepath.Join(path, dir.Name)
+		dirEntry := dir.ToDirEntry()
+		if err := h.walkDir(p, dirEntry, fn); err != nil {
+			if err == filepath.SkipDir {
+				break
+			}
+			return err
+		}
+	}
 	return nil
 }
 
