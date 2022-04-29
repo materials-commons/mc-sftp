@@ -68,6 +68,9 @@ func (h *MCHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 		return nil, os.ErrNotExist
 	}
 
+	//mcFile.file, err = h.stores.fileStore.
+
+	// TODO: Need to get the file
 	if mcFile.fileHandle, err = os.Open(mcFile.file.ToUnderlyingFilePath(h.mcfsRoot)); err != nil {
 		return nil, err
 	}
@@ -123,6 +126,9 @@ func (h *MCHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	return mcFile, nil
 }
 
+// mcfileSetup will setup the MCFile that is used for reading/writing of files. It
+// performs the actions of determining the project, setting up paths, and similar
+// setup items needed to create a MCFile regardless of
 func (h *MCHandler) mcfileSetup(r *sftp.Request) (*MCFile, error) {
 	project, err := h.getProject(r)
 	if err != nil {
@@ -183,7 +189,7 @@ func (h *MCHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 	// empty string. For example if the path is /my-project/this/that,
 	// then the array will be:
 	// ["", "my-project", "this", "that"]
-	// So the project name is parts[1]
+	// So the project slug is parts[1]
 	projectSlug := parts[1]
 	_ = projectSlug
 
