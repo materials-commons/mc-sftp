@@ -5,16 +5,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"mime"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/apex/log"
 	"github.com/charmbracelet/wish/scp"
 	"github.com/gliderlabs/ssh"
 	"github.com/materials-commons/gomcdb/mcmodel"
 	"github.com/materials-commons/gomcdb/store"
+	"github.com/materials-commons/mc-ssh/pkg/mc"
 	"gorm.io/gorm"
 )
 
@@ -46,7 +45,7 @@ func (h *mcfsHandler) Glob(s ssh.Session, pattern string) ([]string, error) {
 }
 
 func (h *mcfsHandler) WalkDir(s ssh.Session, path string, fn fs.WalkDirFunc) error {
-	cleanedPath := h.removeSlugProjectNameFromPath(path)
+	cleanedPath := mc.RemoveProjectSlugFromPath(path, h.project.Name)
 	d, err := h.fileStore.FindDirByPath(h.project.ID, cleanedPath)
 	if err != nil {
 		err = fn(cleanedPath, nil, err)
@@ -93,7 +92,7 @@ func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) err
 }
 
 func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, error) {
-	path := h.removeSlugProjectNameFromPath(name)
+	path := mc.RemoveProjectSlugFromPath(name, h.project.Name)
 	dir, err := h.fileStore.FindDirByPath(h.project.ID, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open dir '%s' for project %d: %s", path, h.project.ID, err)
@@ -110,7 +109,7 @@ func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, er
 }
 
 func (h *mcfsHandler) NewFileEntry(_ ssh.Session, name string) (*scp.FileEntry, func() error, error) {
-	path := h.removeSlugProjectNameFromPath(name)
+	path := mc.RemoveProjectSlugFromPath(name, h.project.Name)
 	file, err := h.fileStore.FindFileByPath(h.project.ID, path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to find file '%s' in project %d: %s", path, h.project.ID, err)
@@ -135,7 +134,7 @@ func (h *mcfsHandler) NewFileEntry(_ ssh.Session, name string) (*scp.FileEntry, 
 // Implement the scp.CopyFromClientHandler interface
 
 func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
-	path := h.removeSlugProjectNameFromPath(entry.Filepath)
+	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Name)
 	parentPath := filepath.Dir(path)
 	parentDir, err := h.fileStore.FindDirByPath(h.project.ID, parentPath)
 	if err != nil {
@@ -169,7 +168,7 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 
 	// Create a file that isn't set as current. This way the file doesn't show up until it's
 	// data has been written.
-	if file, err = h.fileStore.CreateFile(entry.Name, h.project.ID, dir.ID, h.user.ID, getMimeType(entry.Name)); err != nil {
+	if file, err = h.fileStore.CreateFile(entry.Name, h.project.ID, dir.ID, h.user.ID, mc.GetMimeType(entry.Name)); err != nil {
 		return 0, fmt.Errorf("unable to create file '%s' in dir %d for project %d: %s", entry.Name, dir.ID, h.project.ID, err)
 	}
 
@@ -205,38 +204,4 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 	}
 
 	return written, nil
-}
-
-//// Utility methods
-
-// removeSlugProjectNameFromPath removes the slug project name from the path. For example the slug
-// project name might be my-project-acf4. All paths will be prefixed with /my-project-acf4. So if
-// the path is /my-project-acf4/file.txt then this method will return /file.txt
-func (h *mcfsHandler) removeSlugProjectNameFromPath(path string) string {
-	cleanedPath := filepath.Clean(path)
-	// Replace Name with slug once we've added it
-	sluggedNamePath := filepath.Join("/", h.project.Name)
-
-	if strings.HasPrefix(cleanedPath, sluggedNamePath) {
-		return strings.TrimPrefix(cleanedPath, sluggedNamePath)
-	}
-
-	return cleanedPath
-}
-
-// getMimeType will determine the type of a file from its extension. It strips out the extra information
-// such as the charset and just returns the underlying type. It returns "unknown" for the mime type if
-// the mime package is unable to determine the type.
-func getMimeType(name string) string {
-	mimeType := mime.TypeByExtension(filepath.Ext(name))
-	if mimeType == "" {
-		return "unknown"
-	}
-
-	semicolon := strings.Index(mimeType, ";")
-	if semicolon == -1 {
-		return strings.TrimSpace(mimeType)
-	}
-
-	return strings.TrimSpace(mimeType[:semicolon])
 }
