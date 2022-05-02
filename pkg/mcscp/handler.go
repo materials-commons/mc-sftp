@@ -167,20 +167,24 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 
 // Write will create a new file version in the project and write the data to the physical file.
 func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) {
-	fmt.Println("scp: Write")
-	user := s.Context().Value("mcuser").(*mcmodel.User)
-	fmt.Printf("scp Write: %+v\n", user)
 
-	if true {
-		return 0, fmt.Errorf("not implemented")
-	}
 	var (
 		err  error
 		dir  *mcmodel.File
 		file *mcmodel.File
 	)
 
+	fmt.Println("scp: Write")
+	user := s.Context().Value("mcuser").(*mcmodel.User)
+	fmt.Printf("scp Write: %+v\n", user)
+
 	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
+
+	fmt.Printf("Filepath = %s, path = %s\n", entry.Filepath, path)
+
+	if true {
+		return 0, fmt.Errorf("not implemented")
+	}
 
 	// First steps - Make sure the project has the directory already in. If it doesn't there is
 	// a failure somewhere else as the directory should have been created.
