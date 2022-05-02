@@ -141,10 +141,7 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 		return fmt.Errorf("parent directory doesn't exist in project %d, parent path %s: %s", h.project.ID, parentPath, err)
 	}
 
-	// Fake up a TransferRequest for CreateDirectory, since only the projectID and OwnerID are used
-	// TODO: Fix the CreateDirectory API so this doesn't need to be done.
-	tr := mcmodel.TransferRequest{ProjectID: h.project.ID, OwnerID: h.user.ID}
-	_, err = h.fileStore.CreateDirectory(parentDir.ID, path, filepath.Base(path), tr)
+	_, err = h.fileStore.CreateDirectory(parentDir.ID, h.project.ID, h.user.ID, path, filepath.Base(path))
 	if err != nil {
 		return fmt.Errorf("unable to create directory path %s in directory %d: %s", path, parentDir.ID, err)
 	}

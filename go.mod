@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/charmbracelet/wish v0.3.1
-	github.com/materials-commons/gomcdb v0.0.0-20220428190617-d384f2248c28
+	github.com/materials-commons/gomcdb v0.0.0-20220502173334-eee3e568594b
 	github.com/pkg/sftp v1.13.4
 	github.com/spf13/cobra v1.4.0
 	golang.org/x/crypto v0.0.0-20220411220226-7b82a4e95df4
