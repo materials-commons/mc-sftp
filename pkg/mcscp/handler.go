@@ -100,7 +100,7 @@ func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, er
 	if true {
 		return nil, fmt.Errorf("not implemented")
 	}
-	path := mc.RemoveProjectSlugFromPath(name, h.project.Name)
+	path := mc.RemoveProjectSlugFromPath(name, h.project.Slug)
 	dir, err := h.fileStore.FindDirByPath(h.project.ID, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open dir '%s' for project %d: %s", path, h.project.ID, err)
@@ -121,7 +121,7 @@ func (h *mcfsHandler) NewFileEntry(_ ssh.Session, name string) (*scp.FileEntry, 
 	if true {
 		return nil, nil, fmt.Errorf("not implemented")
 	}
-	path := mc.RemoveProjectSlugFromPath(name, h.project.Name)
+	path := mc.RemoveProjectSlugFromPath(name, h.project.Slug)
 	file, err := h.fileStore.FindFileByPath(h.project.ID, path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to find file '%s' in project %d: %s", path, h.project.ID, err)
@@ -150,7 +150,7 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 	if true {
 		return fmt.Errorf("not implemented")
 	}
-	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Name)
+	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
 	parentPath := filepath.Dir(path)
 	parentDir, err := h.fileStore.FindDirByPath(h.project.ID, parentPath)
 	if err != nil {
@@ -180,10 +180,12 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 		file *mcmodel.File
 	)
 
+	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
+
 	// First steps - Make sure the project has the directory already in. If it doesn't there is
 	// a failure somewhere else as the directory should have been created.
-	if dir, err = h.fileStore.FindDirByPath(h.project.ID, filepath.Dir(entry.Filepath)); err != nil {
-		return 0, fmt.Errorf("unable to find dir '%s' for project %d: %s", filepath.Dir(entry.Filepath), h.project.ID, err)
+	if dir, err = h.fileStore.FindDirByPath(h.project.ID, filepath.Dir(path)); err != nil {
+		return 0, fmt.Errorf("unable to find dir '%s' for project %d: %s", filepath.Dir(path), h.project.ID, err)
 	}
 
 	// Create a file that isn't set as current. This way the file doesn't show up until it's
