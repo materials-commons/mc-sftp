@@ -13,6 +13,10 @@ import (
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/scp"
 	"github.com/gliderlabs/ssh"
+	mcdb "github.com/materials-commons/gomcdb"
+	"github.com/materials-commons/gomcdb/mcmodel"
+	"github.com/materials-commons/gomcdb/store"
+	"github.com/materials-commons/mc-ssh/pkg/mcscp"
 	"github.com/pkg/sftp"
 	"github.com/spf13/cobra"
 )
@@ -55,7 +59,17 @@ const host = "localhost"
 const port = 23234
 const root = "/tmp/scp/testdata"
 
+var userStore *store.UserStore
+
 func passwordHandler(context ssh.Context, password string) bool {
+	userSlug := context.User()
+	user, err := userStore.GetUserBySlug(userSlug)
+	if err != nil {
+		return false
+	}
+
+	context.SetValue("mcuser", user)
+
 	return true
 }
 
@@ -91,6 +105,11 @@ func sftpMiddleware() wish.Middleware {
 		fmt.Println("handler for sftpMiddleware")
 		return func(session ssh.Session) {
 			fmt.Println("Starting NewRequestServer")
+			user := session.Context().Value("mcuser").(*mcmodel.User)
+			fmt.Printf("%+v\n", user)
+			if true {
+				return
+			}
 			channel := session
 			root := sftp.InMemHandler()
 			server := sftp.NewRequestServer(channel, root)
@@ -106,7 +125,10 @@ func sftpMiddleware() wish.Middleware {
 }
 
 func mcsshdMain(cmd *cobra.Command, args []string) {
-	handler := scp.NewFileSystemHandler(root)
+	db := mcdb.MustConnectToDB()
+	userStore = store.NewUserStore(db)
+	handler := mcscp.NewMCFSHandler(db, root)
+	//handler := scp.NewFileSystemHandler(root)
 	fmt.Println("SCP Root:", root)
 	s, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%d", host, port)),
@@ -121,6 +143,11 @@ func mcsshdMain(cmd *cobra.Command, args []string) {
 	s.SubsystemHandlers = make(map[string]ssh.SubsystemHandler)
 	s.SubsystemHandlers["sftp"] = func(s ssh.Session) {
 		fmt.Println("sftp")
+		user := s.Context().Value("mcuser").(*mcmodel.User)
+		fmt.Printf("sftp Write: %+v\n", user)
+		if true {
+			return
+		}
 		channel := s
 		root := sftp.InMemHandler()
 		server := sftp.NewRequestServer(channel, root)

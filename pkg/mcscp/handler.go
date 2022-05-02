@@ -22,17 +22,13 @@ type mcfsHandler struct {
 	project      mcmodel.Project
 	fileStore    *store.FileStore
 	projectStore *store.ProjectStore
-	root         string
 	mcfsRoot     string
 }
 
-func NewMCFSHandler(db *gorm.DB, root string, mcfsRoot string, user mcmodel.User, project mcmodel.Project) scp.Handler {
+func NewMCFSHandler(db *gorm.DB, mcfsRoot string) scp.Handler {
 	return &mcfsHandler{
-		user:         user,
-		project:      project,
 		fileStore:    store.NewFileStore(db, mcfsRoot),
 		projectStore: store.NewProjectStore(db),
-		root:         root,
 		mcfsRoot:     mcfsRoot,
 	}
 }
@@ -41,10 +37,18 @@ func NewMCFSHandler(db *gorm.DB, root string, mcfsRoot string, user mcmodel.User
 
 // Glob Don't support Glob for now...
 func (h *mcfsHandler) Glob(s ssh.Session, pattern string) ([]string, error) {
+	fmt.Println("scp: Glob")
+	if true {
+		return nil, fmt.Errorf("not implemented")
+	}
 	return []string{pattern}, nil
 }
 
 func (h *mcfsHandler) WalkDir(s ssh.Session, path string, fn fs.WalkDirFunc) error {
+	fmt.Println("scp: Walkdir")
+	if true {
+		return fmt.Errorf("not implemented")
+	}
 	cleanedPath := mc.RemoveProjectSlugFromPath(path, h.project.Name)
 	d, err := h.fileStore.FindDirByPath(h.project.ID, cleanedPath)
 	if err != nil {
@@ -92,6 +96,10 @@ func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) err
 }
 
 func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, error) {
+	fmt.Println("scp: NewDirEntry")
+	if true {
+		return nil, fmt.Errorf("not implemented")
+	}
 	path := mc.RemoveProjectSlugFromPath(name, h.project.Name)
 	dir, err := h.fileStore.FindDirByPath(h.project.ID, path)
 	if err != nil {
@@ -109,6 +117,10 @@ func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, er
 }
 
 func (h *mcfsHandler) NewFileEntry(_ ssh.Session, name string) (*scp.FileEntry, func() error, error) {
+	fmt.Println("scp: NewFileEntry")
+	if true {
+		return nil, nil, fmt.Errorf("not implemented")
+	}
 	path := mc.RemoveProjectSlugFromPath(name, h.project.Name)
 	file, err := h.fileStore.FindFileByPath(h.project.ID, path)
 	if err != nil {
@@ -134,6 +146,10 @@ func (h *mcfsHandler) NewFileEntry(_ ssh.Session, name string) (*scp.FileEntry, 
 // Implement the scp.CopyFromClientHandler interface
 
 func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
+	fmt.Println("scp: Mkdir")
+	if true {
+		return fmt.Errorf("not implemented")
+	}
 	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Name)
 	parentPath := filepath.Dir(path)
 	parentDir, err := h.fileStore.FindDirByPath(h.project.ID, parentPath)
@@ -151,6 +167,13 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 
 // Write will create a new file version in the project and write the data to the physical file.
 func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) {
+	fmt.Println("scp: Write")
+	user := s.Context().Value("mcuser").(*mcmodel.User)
+	fmt.Printf("scp Write: %+v\n", user)
+
+	if true {
+		return 0, fmt.Errorf("not implemented")
+	}
 	var (
 		err  error
 		dir  *mcmodel.File
