@@ -18,36 +18,38 @@ import (
 )
 
 type mcfsHandler struct {
-	user         mcmodel.User
-	project      mcmodel.Project
-	fileStore    *store.FileStore
-	projectStore *store.ProjectStore
-	mcfsRoot     string
+	project        *mcmodel.Project
+	fileStore      *store.FileStore
+	projectStore   *store.ProjectStore
+	invalidProject bool
+	mcfsRoot       string
 }
 
 func NewMCFSHandler(db *gorm.DB, mcfsRoot string) scp.Handler {
 	return &mcfsHandler{
-		fileStore:    store.NewFileStore(db, mcfsRoot),
-		projectStore: store.NewProjectStore(db),
-		mcfsRoot:     mcfsRoot,
+		fileStore:      store.NewFileStore(db, mcfsRoot),
+		projectStore:   store.NewProjectStore(db),
+		invalidProject: false,
+		mcfsRoot:       mcfsRoot,
 	}
 }
 
-// Implement the scp.CopyToClientHandler interface
+// Implement Glob, Walkdir, NewDirEntry and NewFileEntry for the scp.CopyToClientHandler interface
 
 // Glob Don't support Glob for now...
 func (h *mcfsHandler) Glob(s ssh.Session, pattern string) ([]string, error) {
-	fmt.Println("scp: Glob")
-	if true {
-		return nil, fmt.Errorf("not implemented")
-	}
+	fmt.Println("scp Glob:", pattern)
 	return []string{pattern}, nil
 }
 
 func (h *mcfsHandler) WalkDir(s ssh.Session, path string, fn fs.WalkDirFunc) error {
-	fmt.Println("scp: Walkdir")
+	fmt.Println("scp Walkdir:", path)
 	if true {
 		return fmt.Errorf("not implemented")
+	}
+	user := s.Context().Value("mcuser").(*mcmodel.User)
+	if err := h.loadProjectIntoHandler(path, user.ID); err != nil {
+		return err
 	}
 	cleanedPath := mc.RemoveProjectSlugFromPath(path, h.project.Name)
 	d, err := h.fileStore.FindDirByPath(h.project.ID, cleanedPath)
@@ -100,6 +102,11 @@ func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, er
 	if true {
 		return nil, fmt.Errorf("not implemented")
 	}
+	user := s.Context().Value("mcuser").(*mcmodel.User)
+	if err := h.loadProjectIntoHandler(name, user.ID); err != nil {
+		return nil, err
+	}
+
 	path := mc.RemoveProjectSlugFromPath(name, h.project.Slug)
 	dir, err := h.fileStore.FindDirByPath(h.project.ID, path)
 	if err != nil {
@@ -116,19 +123,23 @@ func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, er
 	}, nil
 }
 
-func (h *mcfsHandler) NewFileEntry(_ ssh.Session, name string) (*scp.FileEntry, func() error, error) {
-	fmt.Println("scp: NewFileEntry")
-	if true {
-		return nil, nil, fmt.Errorf("not implemented")
+func (h *mcfsHandler) NewFileEntry(s ssh.Session, name string) (*scp.FileEntry, func() error, error) {
+	fmt.Println("scp NewFileEntry:", name)
+	user := s.Context().Value("mcuser").(*mcmodel.User)
+	if err := h.loadProjectIntoHandler(name, user.ID); err != nil {
+		return nil, nil, err
 	}
+
 	path := mc.RemoveProjectSlugFromPath(name, h.project.Slug)
 	file, err := h.fileStore.FindFileByPath(h.project.ID, path)
 	if err != nil {
+		log.Errorf("Unable to find file %q in project %d: %s", path, h.project.ID, err)
 		return nil, nil, fmt.Errorf("unable to find file '%s' in project %d: %s", path, h.project.ID, err)
 	}
 
 	f, err := os.Open(file.ToUnderlyingFilePath(h.mcfsRoot))
 	if err != nil {
+		log.Errorf("Failed to open file %q: %s", path, err)
 		return nil, nil, fmt.Errorf("failed to open %q: %w", path, err)
 	}
 
@@ -143,13 +154,21 @@ func (h *mcfsHandler) NewFileEntry(_ ssh.Session, name string) (*scp.FileEntry, 
 	}, f.Close, nil
 }
 
-// Implement the scp.CopyFromClientHandler interface
+// Implement Mkdir and Write for the scp.CopyFromClientHandler interface
 
 func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
-	fmt.Println("scp: Mkdir")
+	fmt.Println("scp Mkdir:", entry.Filepath)
 	if true {
 		return fmt.Errorf("not implemented")
 	}
+
+	// See passwordHandler in cmd/mc-sshd/cmd/root for setting the "mcuser" key.
+	user := s.Context().Value("mcuser").(*mcmodel.User)
+
+	if err := h.loadProjectIntoHandler(entry.Filepath, user.ID); err != nil {
+		return err
+	}
+
 	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
 	parentPath := filepath.Dir(path)
 	parentDir, err := h.fileStore.FindDirByPath(h.project.ID, parentPath)
@@ -157,7 +176,7 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 		return fmt.Errorf("parent directory doesn't exist in project %d, parent path %s: %s", h.project.ID, parentPath, err)
 	}
 
-	_, err = h.fileStore.CreateDirectory(parentDir.ID, h.project.ID, h.user.ID, path, filepath.Base(path))
+	_, err = h.fileStore.CreateDirectory(parentDir.ID, h.project.ID, user.ID, path, filepath.Base(path))
 	if err != nil {
 		return fmt.Errorf("unable to create directory path %s in directory %d: %s", path, parentDir.ID, err)
 	}
@@ -167,39 +186,44 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 
 // Write will create a new file version in the project and write the data to the physical file.
 func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) {
-
 	var (
 		err  error
 		dir  *mcmodel.File
 		file *mcmodel.File
 	)
 
-	fmt.Println("scp: Write")
+	// See passwordHandler in cmd/mc-sshd/cmd/root for setting the "mcuser" key.
 	user := s.Context().Value("mcuser").(*mcmodel.User)
-	fmt.Printf("scp Write: %+v\n", user)
+
+	if err := h.loadProjectIntoHandler(entry.Filepath, user.ID); err != nil {
+		return 0, err
+	}
 
 	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
 
-	fmt.Printf("Filepath = %s, path = %s\n", entry.Filepath, path)
+	fmt.Printf("entry.Filepath = %q, path = %q, filepath.Dir = %q\n", entry.Filepath, path, filepath.Dir(path))
 
-	if true {
-		return 0, fmt.Errorf("not implemented")
-	}
-
-	// First steps - Make sure the project has the directory already in. If it doesn't there is
-	// a failure somewhere else as the directory should have been created.
-	if dir, err = h.fileStore.FindDirByPath(h.project.ID, filepath.Dir(path)); err != nil {
+	// First steps - Find or create the directories in the path
+	if dir, err = h.fileStore.FindOrCreateDirPath(h.project.ID, user.ID, filepath.Dir(path)); err != nil {
 		return 0, fmt.Errorf("unable to find dir '%s' for project %d: %s", filepath.Dir(path), h.project.ID, err)
 	}
 
 	// Create a file that isn't set as current. This way the file doesn't show up until it's
 	// data has been written.
-	if file, err = h.fileStore.CreateFile(entry.Name, h.project.ID, dir.ID, h.user.ID, mc.GetMimeType(entry.Name)); err != nil {
+	if file, err = h.fileStore.CreateFile(entry.Name, h.project.ID, dir.ID, user.ID, mc.GetMimeType(entry.Name)); err != nil {
+		log.Errorf("Error creating file %s in project %d, in directory %d for user %d: %s", entry.Name, h.project.ID, dir.ID, user.ID, err)
 		return 0, fmt.Errorf("unable to create file '%s' in dir %d for project %d: %s", entry.Name, dir.ID, h.project.ID, err)
+	}
+
+	// Create the directory path where the file will be written to
+	if err := os.MkdirAll(file.ToUnderlyingDirPath(h.mcfsRoot), 0777); err != nil {
+		log.Errorf("Error creating directory path %s: %s", file.ToUnderlyingDirPath(h.mcfsRoot), err)
+		return 0, err
 	}
 
 	f, err := os.OpenFile(file.ToUnderlyingFilePath(h.mcfsRoot), os.O_TRUNC|os.O_RDWR|os.O_CREATE, entry.Mode)
 	if err != nil {
+		log.Errorf("Failed to open file %d path '%s': %s", file.ID, file.ToUnderlyingFilePath(h.mcfsRoot), err)
 		return 0, fmt.Errorf("failed to open file %d path '%s': %s", file.ID, file.ToUnderlyingFilePath(h.mcfsRoot), err)
 	}
 
@@ -222,12 +246,55 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 		log.Errorf("failure writing to file %d: %s", file.ID, err)
 	}
 
-	// Finally mark the file as current, and update all the associated metadata for the file and the project. In the
-	// project we track aggregate statistics such as total project size.
+	// Finally, mark the file as current and update all the associated metadata for the file and the project.
+	// In the project we track aggregate statistics such as total project size.
 	checksum := fmt.Sprintf("%x", hasher.Sum(nil))
 	if err := h.fileStore.UpdateMetadataForFileAndProject(file, checksum, h.project.ID, written); err != nil {
 		log.Errorf("failure updating file (%d) and project (%d) metadata: %s", file.ID, h.project.ID, err)
 	}
 
 	return written, nil
+}
+
+// loadProjectIntoHandler will check if the handler (h.project) is nil. If it isn't then it will return
+// nil (no error). If it is then it will attempt to look up the project from its slug in the path and
+// will also check that the user has access to the project. If either of these fail then the h.project
+// entry won't be set and an error will be returned.
+func (h *mcfsHandler) loadProjectIntoHandler(path string, userID int) error {
+	if h.project != nil {
+		// We've already retrieved it
+		return nil
+	}
+
+	// Look up the project by the slug in the path. Each path needs to have the project slug encoded in it
+	// so that we know which project the user is accessing.
+	projectSlug := mc.GetProjectSlugFromPath(path)
+
+	if h.invalidProject {
+		// Already tried looking up the project slug and either it doesn't exist or the user
+		// didn't have access. No need to try again, just return an error.
+		return fmt.Errorf("no such project %s", projectSlug)
+	}
+
+	project, err := h.projectStore.GetProjectBySlug(projectSlug)
+	if err != nil {
+		log.Errorf("No such project slug %s", projectSlug)
+
+		// Mark invalidProject as true so we don't attempt to look it up again.
+		h.invalidProject = true
+		return err
+	}
+
+	// Once we have the project we need to check that the user has access to the project.
+	if !h.projectStore.UserCanAccessProject(userID, project.ID) {
+		log.Errorf("User %d doesn't have access to project %d (%s)", userID, h.project.ID, h.project.Slug)
+
+		// Mark invalidProject as true so we don't attempt to look it up again.
+		h.invalidProject = true
+		return fmt.Errorf("no such project %s", projectSlug)
+	}
+
+	h.project = project
+
+	return nil
 }

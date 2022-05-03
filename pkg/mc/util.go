@@ -20,6 +20,18 @@ func RemoveProjectSlugFromPath(path, projectSlug string) string {
 	return cleanedPath
 }
 
+func GetProjectSlugFromPath(path string) string {
+	parts := strings.Split(path, "/")
+	// parts will be an array with the first element being an
+	// empty string. For example if the path is /my-project/this/that,
+	// then the array will be:
+	// ["", "my-project", "this", "that"]
+	// So the project slug is parts[1]
+	projectSlug := parts[1]
+
+	return projectSlug
+}
+
 // GetMimeType will determine the type of a file from its extension. It strips out the extra information
 // such as the charset and just returns the underlying type. It returns "unknown" for the mime type if
 // the mime package is unable to determine the type.
