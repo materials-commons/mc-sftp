@@ -20,6 +20,9 @@ func RemoveProjectSlugFromPath(path, projectSlug string) string {
 	return cleanedPath
 }
 
+// GetProjectSlugFromPath extracts the project slug from the
+// beginning of the path. For example /my-project/this/that
+// has a project slug of "my-project".
 func GetProjectSlugFromPath(path string) string {
 	parts := strings.Split(path, "/")
 	// parts will be an array with the first element being an
