@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/scp"
 	"github.com/gliderlabs/ssh"
@@ -19,6 +19,7 @@ import (
 	"github.com/materials-commons/mc-ssh/pkg/mcscp"
 	"github.com/pkg/sftp"
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -65,6 +66,12 @@ func passwordHandler(context ssh.Context, password string) bool {
 	userSlug := context.User()
 	user, err := userStore.GetUserBySlug(userSlug)
 	if err != nil {
+		log.Errorf("Invalid user slug %q: %s", userSlug, err)
+		return false
+	}
+
+	if err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
+		log.Errorf("Invalid password")
 		return false
 	}
 
@@ -115,9 +122,8 @@ func sftpMiddleware() wish.Middleware {
 			server := sftp.NewRequestServer(channel, root)
 			if err := server.Serve(); err == io.EOF {
 				server.Close()
-				log.Print("sftp client exited session.")
 			} else if err != nil {
-				log.Fatal("sftp server completed with error:", err)
+				log.Fatalf("sftp server completed with error:", err)
 			}
 			handler(session)
 		}
@@ -153,30 +159,28 @@ func mcsshdMain(cmd *cobra.Command, args []string) {
 		server := sftp.NewRequestServer(channel, root)
 		if err := server.Serve(); err == io.EOF {
 			server.Close()
-			log.Print("sftp client exited session.")
 		} else if err != nil {
-			log.Print("sftp server completed with error:", err)
+			log.Errorf("sftp server completed with error: %s", err)
 		}
 	}
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalf("%s", err)
 	}
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	log.Printf("Starting SSH server on %s:%d", host, port)
+	log.Infof("Starting SSH server on %s:%d", host, port)
 	go func() {
 		if err = s.ListenAndServe(); err != nil {
-			log.Fatalln(err)
+			log.Fatalf("%s", err)
 		}
 	}()
 
 	<-done
-	log.Println("Stopping SSH server")
+	log.Info("Stopping SSH server")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer func() { cancel() }()
 	if err := s.Shutdown(ctx); err != nil {
-		log.Fatalln(err)
+		log.Fatalf("%s", err)
 	}
-
 }
