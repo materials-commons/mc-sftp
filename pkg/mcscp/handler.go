@@ -18,26 +18,40 @@ import (
 )
 
 type mcfsHandler struct {
-	project        *mcmodel.Project
-	fileStore      *store.FileStore
-	projectStore   *store.ProjectStore
+	// The project that this scp instance is using. It gets loaded from the path the user specified. See
+	// loadProjectIntoHandler and pkg/mc/util mc.*ProjectSlug* methods for how this is handled.
+	project *mcmodel.Project
+
+	fileStore       *store.FileStore
+	projectStore    *store.ProjectStore
+	conversionStore *store.ConversionStore
+
+	// Each call has to attempt to load the project. The project gets loaded once in the mcfsHandler. However,
+	// it's possible that the project is invalid and that multiple calls may be made to retrieve it. We don't
+	// want to hit the database each time trying to retrieve an invalid project, so invalidProject tracks this
+	// state. See the method loadProjectIntoHandler which is called at the top of each of the callbacks for
+	// details on loading the project into the mcfsHandler struct, and for how invalidProject is used.
 	invalidProject bool
-	mcfsRoot       string
+
+	// This is the root where files get stored in Materials Commons. This path is needed for creating
+	// new (in the file system) files, as well as for setting up the fileStore.
+	mcfsRoot string
 }
 
 func NewMCFSHandler(db *gorm.DB, mcfsRoot string) scp.Handler {
 	return &mcfsHandler{
-		fileStore:      store.NewFileStore(db, mcfsRoot),
-		projectStore:   store.NewProjectStore(db),
-		invalidProject: false,
-		mcfsRoot:       mcfsRoot,
+		fileStore:       store.NewFileStore(db, mcfsRoot),
+		projectStore:    store.NewProjectStore(db),
+		conversionStore: store.NewConversionStore(db),
+		invalidProject:  false,
+		mcfsRoot:        mcfsRoot,
 	}
 }
 
 // Implement Glob, Walkdir, NewDirEntry and NewFileEntry for the scp.CopyToClientHandler interface
 
 // Glob Don't support Glob for now...
-func (h *mcfsHandler) Glob(s ssh.Session, pattern string) ([]string, error) {
+func (h *mcfsHandler) Glob(_ ssh.Session, pattern string) ([]string, error) {
 	fmt.Println("scp Glob:", pattern)
 	return []string{pattern}, nil
 }
@@ -156,12 +170,11 @@ func (h *mcfsHandler) NewFileEntry(s ssh.Session, name string) (*scp.FileEntry, 
 
 // Implement Mkdir and Write for the scp.CopyFromClientHandler interface
 
+// Mkdir will create missing directories in the upload. **Note** this callback is only
+// called when a recursive upload is specified. So the Write callback below also needs
+// to handle directory creation for individual files that are being written to a
+// directory that doesn't exist.
 func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
-	fmt.Println("scp Mkdir:", entry.Filepath)
-	if true {
-		return fmt.Errorf("not implemented")
-	}
-
 	// See passwordHandler in cmd/mc-sshd/cmd/root for setting the "mcuser" key.
 	user := s.Context().Value("mcuser").(*mcmodel.User)
 
@@ -170,27 +183,28 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 	}
 
 	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
-	parentPath := filepath.Dir(path)
-	parentDir, err := h.fileStore.FindDirByPath(h.project.ID, parentPath)
-	if err != nil {
-		return fmt.Errorf("parent directory doesn't exist in project %d, parent path %s: %s", h.project.ID, parentPath, err)
-	}
 
-	_, err = h.fileStore.CreateDirectory(parentDir.ID, h.project.ID, user.ID, path, filepath.Base(path))
-	if err != nil {
-		return fmt.Errorf("unable to create directory path %s in directory %d: %s", path, parentDir.ID, err)
+	if _, err := h.fileStore.FindOrCreateDirPath(h.project.ID, user.ID, path); err != nil {
+		return fmt.Errorf("unable to find dir '%s' for project %d: %s", path, h.project.ID, err)
 	}
 
 	return nil
 }
 
 // Write will create a new file version in the project and write the data to the physical file.
+// **Note** The Mkdir callback above is only called on recursive uploads. That means this method
+// also has to handle directory creation.
 func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) {
 	var (
 		err  error
 		dir  *mcmodel.File
 		file *mcmodel.File
 	)
+
+	// After writing the file if we determine that a file matching its checksum already exists then
+	// we can delete the file just written (because we updated the file in the database to point at
+	// the file with the matching checksum)
+	deleteFile := false
 
 	// See passwordHandler in cmd/mc-sshd/cmd/root for setting the "mcuser" key.
 	user := s.Context().Value("mcuser").(*mcmodel.User)
@@ -200,8 +214,6 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 	}
 
 	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
-
-	fmt.Printf("entry.Filepath = %q, path = %q, filepath.Dir = %q\n", entry.Filepath, path, filepath.Dir(path))
 
 	// First steps - Find or create the directories in the path
 	if dir, err = h.fileStore.FindOrCreateDirPath(h.project.ID, user.ID, filepath.Dir(path)); err != nil {
@@ -233,11 +245,17 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 		if err := f.Close(); err != nil {
 			log.Errorf("error closing file (%d) at '%s': %s", file.ID, file.ToUnderlyingFilePath(h.mcfsRoot), err)
 		}
+
+		// A file matching this files checksum already exists in the system so delete the file we just
+		// uploaded. See the call to h.fileStore.PointAtExistingIfExists towards the end of this method.
+		if deleteFile {
+			_ = os.Remove(file.ToUnderlyingFilePath(h.mcfsRoot))
+		}
 	}()
 
 	// Each file in Materials Commons has a checksum associated with it. Create a TeeReader so that as the file is
 	// read it goes to two separate destinations. One is the file we just opened, and the second is the hasher that
-	// be computing the hash.
+	// is computing the hash.
 	hasher := md5.New()
 	teeReader := io.TeeReader(entry.Reader, hasher)
 
@@ -246,11 +264,28 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 		log.Errorf("failure writing to file %d: %s", file.ID, err)
 	}
 
-	// Finally, mark the file as current and update all the associated metadata for the file and the project.
-	// In the project we track aggregate statistics such as total project size.
+	// Mark the file as current and update all the associated metadata for the file and the project.
 	checksum := fmt.Sprintf("%x", hasher.Sum(nil))
 	if err := h.fileStore.UpdateMetadataForFileAndProject(file, checksum, h.project.ID, written); err != nil {
 		log.Errorf("failure updating file (%d) and project (%d) metadata: %s", file.ID, h.project.ID, err)
+	}
+
+	// Check if there is a file with matching checksum, and if so have the file point at it and set
+	// deleteFile to true so that the defer call above that will close the file we wrote to will
+	// also delete it.
+	if switched, err := h.fileStore.PointAtExistingIfExists(file); err == nil && switched {
+		// There was no error returned and switched is set to true. This means there was an existing
+		// file that we pointed at so the file we wrote to can be deleted.
+		deleteFile = true
+	}
+
+	// Check if file type is one we do a conversion on to make viewable on the web, and if it is
+	// then schedule a conversion to run.
+	if file.IsConvertible() {
+		// Queue up a conversion job
+		if _, err := h.conversionStore.AddFileToConvert(file); err != nil {
+			log.Errorf("failed adding file %d to be converted: %s", file.ID, err)
+		}
 	}
 
 	return written, nil
