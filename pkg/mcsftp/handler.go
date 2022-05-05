@@ -14,23 +14,16 @@ import (
 
 	"github.com/apex/log"
 	"github.com/materials-commons/gomcdb/mcmodel"
-	"github.com/materials-commons/gomcdb/store"
 	"github.com/materials-commons/mc-ssh/pkg/mc"
 	"github.com/pkg/sftp"
 )
-
-type MCStores struct {
-	fileStore       *store.GormFileStore
-	projectStore    *store.GormProjectStore
-	conversionStore *store.GormConversionStore
-}
 
 type MCFile struct {
 	user         *mcmodel.User
 	file         *mcmodel.File
 	dir          *mcmodel.File
 	project      *mcmodel.Project
-	stores       *MCStores
+	stores       *mc.Stores
 	fileHandle   *os.File
 	ftpPath      string
 	projectPath  string
@@ -38,9 +31,10 @@ type MCFile struct {
 	hasher       hash.Hash
 }
 
-type MCHandler struct {
+type mcfsHandler struct {
 	user     *mcmodel.User
-	stores   *MCStores
+	project  *mcmodel.Project
+	stores   *mc.Stores
 	mcfsRoot string
 
 	// Protects files
@@ -48,8 +42,8 @@ type MCHandler struct {
 	files map[string]*MCFile
 }
 
-func NewMCHandler(user *mcmodel.User, stores *MCStores, mcfsRoot string) *MCHandler {
-	return &MCHandler{
+func NewMCHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) *mcfsHandler {
+	return &mcfsHandler{
 		user:     user,
 		stores:   stores,
 		files:    make(map[string]*MCFile),
@@ -57,7 +51,7 @@ func NewMCHandler(user *mcmodel.User, stores *MCStores, mcfsRoot string) *MCHand
 	}
 }
 
-func (h *MCHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 	flags := r.Pflags()
 	if !flags.Read {
 		return nil, os.ErrInvalid
@@ -82,7 +76,7 @@ func (h *MCHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 	return mcFile, nil
 }
 
-func (h *MCHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
+func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	flags := r.Pflags()
 	if !flags.Write {
 		return nil, os.ErrInvalid
@@ -94,7 +88,7 @@ func (h *MCHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	}
 
 	fileName := filepath.Base(mcFile.projectPath)
-	mcFile.file, err = h.stores.fileStore.CreateFile(fileName, mcFile.project.ID, mcFile.dir.ID, h.user.ID, mc.GetMimeType(fileName))
+	mcFile.file, err = h.stores.FileStore.CreateFile(fileName, mcFile.project.ID, mcFile.dir.ID, h.user.ID, mc.GetMimeType(fileName))
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
@@ -129,7 +123,7 @@ func (h *MCHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 // mcfileSetup will setup the MCFile that is used for reading/writing of files. It
 // performs the actions of determining the project, setting up paths, and similar
 // setup items needed to create a MCFile regardless of
-func (h *MCHandler) mcfileSetup(r *sftp.Request) (*MCFile, error) {
+func (h *mcfsHandler) mcfileSetup(r *sftp.Request) (*MCFile, error) {
 	project, err := h.getProject(r)
 	if err != nil {
 		return nil, os.ErrNotExist
@@ -137,7 +131,7 @@ func (h *MCHandler) mcfileSetup(r *sftp.Request) (*MCFile, error) {
 
 	path := mc.RemoveProjectSlugFromPath(r.Filepath, project.Name)
 
-	dir, err := h.stores.fileStore.GetDirByPath(project.ID, filepath.Dir(path))
+	dir, err := h.stores.FileStore.GetDirByPath(project.ID, filepath.Dir(path))
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
@@ -152,7 +146,7 @@ func (h *MCHandler) mcfileSetup(r *sftp.Request) (*MCFile, error) {
 	}, nil
 }
 
-func (h *MCHandler) Filecmd(r *sftp.Request) error {
+func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
 	switch r.Method {
 	case "Mkdir":
 		return nil
@@ -171,7 +165,7 @@ func (h *MCHandler) Filecmd(r *sftp.Request) error {
 	}
 }
 
-func (h *MCHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
+func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 	switch r.Method {
 	case "List":
 	case "Stat":
@@ -183,7 +177,7 @@ func (h *MCHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 	return nil, nil
 }
 
-func (h *MCHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
+func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 	parts := strings.Split(r.Filepath, "/")
 	// parts will be an array with the first element being an
 	// empty string. For example if the path is /my-project/this/that,
@@ -194,12 +188,12 @@ func (h *MCHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 	_ = projectSlug
 
 	// hard code project for now until we add the slug to the database
-	project, err := h.stores.projectStore.GetProjectByID(1)
+	project, err := h.stores.ProjectStore.GetProjectByID(1)
 	if err != nil {
 		return nil, err
 	}
 
-	if !h.stores.projectStore.UserCanAccessProject(h.user.ID, project.ID) {
+	if !h.stores.ProjectStore.UserCanAccessProject(h.user.ID, project.ID) {
 		return nil, fmt.Errorf("no such project %s", projectSlug)
 	}
 
@@ -232,7 +226,7 @@ func (f *MCFile) Close() error {
 	}
 
 	checksum := fmt.Sprintf("%x", f.hasher.Sum(nil))
-	if err := f.stores.fileStore.UpdateMetadataForFileAndProject(f.file, checksum, f.project.ID, finfo.Size()); err != nil {
+	if err := f.stores.FileStore.UpdateMetadataForFileAndProject(f.file, checksum, f.project.ID, finfo.Size()); err != nil {
 		log.Errorf("Failure updating file (%d) and project (%d) metadata: %s", f.file.ID, f.project.ID, err)
 	}
 
