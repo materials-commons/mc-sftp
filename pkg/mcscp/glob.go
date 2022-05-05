@@ -15,7 +15,7 @@ func (h *mcfsHandler) glob(pattern string) (matches []string, err error) {
 	}
 
 	if !hasMeta(pattern) {
-		if _, err = h.fileStore.FindFileByPath(h.project.ID, pattern); err != nil {
+		if _, err = h.stores.FileStore.GetFileByPath(h.project.ID, pattern); err != nil {
 			return nil, nil
 		}
 		return []string{pattern}, nil
