@@ -12,9 +12,7 @@ import (
 	"github.com/charmbracelet/wish/scp"
 	"github.com/gliderlabs/ssh"
 	"github.com/materials-commons/gomcdb/mcmodel"
-	"github.com/materials-commons/gomcdb/store"
 	"github.com/materials-commons/mc-ssh/pkg/mc"
-	"gorm.io/gorm"
 )
 
 type mcfsHandler struct {
@@ -26,9 +24,8 @@ type mcfsHandler struct {
 	// loadProjectAndUserIntoHandler and pkg/mc/util mc.*ProjectSlug* methods for how this is handled.
 	project *mcmodel.Project
 
-	fileStore       *store.FileStore
-	projectStore    *store.ProjectStore
-	conversionStore *store.ConversionStore
+	// The different stores used in the handler.
+	stores *mc.Stores
 
 	// Each call has to attempt to load the project and the user. The project and user gets loaded once in the
 	// mcfsHandler. However, it's possible that the project is invalid or there was an upstream error and the user
@@ -41,11 +38,9 @@ type mcfsHandler struct {
 	mcfsRoot string
 }
 
-func NewMCFSHandler(db *gorm.DB, mcfsRoot string) scp.Handler {
+func NewMCFSHandler(stores *mc.Stores, mcfsRoot string) scp.Handler {
 	return &mcfsHandler{
-		fileStore:                      store.NewFileStore(db, mcfsRoot),
-		projectStore:                   store.NewProjectStore(db),
-		conversionStore:                store.NewConversionStore(db),
+		stores:                         stores,
 		fatalErrorLoadingProjectOrUser: false,
 		mcfsRoot:                       mcfsRoot,
 	}
@@ -65,7 +60,7 @@ func (h *mcfsHandler) WalkDir(s ssh.Session, path string, fn fs.WalkDirFunc) err
 	}
 
 	cleanedPath := mc.RemoveProjectSlugFromPath(path, h.project.Slug)
-	d, err := h.fileStore.FindDirByPath(h.project.ID, cleanedPath)
+	d, err := h.stores.FileStore.GetDirByPath(h.project.ID, cleanedPath)
 	if err != nil {
 		err = fn(cleanedPath, nil, err)
 	} else {
@@ -89,7 +84,7 @@ func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) err
 		return err
 	}
 
-	dirs, err := h.fileStore.ListDirectoryByPath(h.project.ID, path)
+	dirs, err := h.stores.FileStore.ListDirectoryByPath(h.project.ID, path)
 	if err != nil {
 		log.Errorf("Failure find path %q in project %d: %s", path, h.project.ID, err)
 		err = fn(path, d, err)
@@ -118,7 +113,7 @@ func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, er
 	}
 
 	path := mc.RemoveProjectSlugFromPath(name, h.project.Slug)
-	dir, err := h.fileStore.FindDirByPath(h.project.ID, path)
+	dir, err := h.stores.FileStore.GetDirByPath(h.project.ID, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open dir '%s' for project %d: %s", path, h.project.ID, err)
 	}
@@ -139,7 +134,7 @@ func (h *mcfsHandler) NewFileEntry(s ssh.Session, name string) (*scp.FileEntry, 
 	}
 
 	path := mc.RemoveProjectSlugFromPath(name, h.project.Slug)
-	file, err := h.fileStore.FindFileByPath(h.project.ID, path)
+	file, err := h.stores.FileStore.GetFileByPath(h.project.ID, path)
 	if err != nil {
 		log.Errorf("Unable to find file %q in project %d: %s", path, h.project.ID, err)
 		return nil, nil, fmt.Errorf("unable to find file '%s' in project %d: %s", path, h.project.ID, err)
@@ -175,7 +170,7 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 
 	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
 
-	if _, err := h.fileStore.FindOrCreateDirPath(h.project.ID, h.user.ID, path); err != nil {
+	if _, err := h.stores.FileStore.GetOrCreateDirPath(h.project.ID, h.user.ID, path); err != nil {
 		return fmt.Errorf("unable to find dir '%s' for project %d: %s", path, h.project.ID, err)
 	}
 
@@ -204,13 +199,13 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 	path := mc.RemoveProjectSlugFromPath(entry.Filepath, h.project.Slug)
 
 	// First steps - Find or create the directories in the path
-	if dir, err = h.fileStore.FindOrCreateDirPath(h.project.ID, h.user.ID, filepath.Dir(path)); err != nil {
+	if dir, err = h.stores.FileStore.GetOrCreateDirPath(h.project.ID, h.user.ID, filepath.Dir(path)); err != nil {
 		return 0, fmt.Errorf("unable to find dir '%s' for project %d: %s", filepath.Dir(path), h.project.ID, err)
 	}
 
 	// Create a file that isn't set as current. This way the file doesn't show up until it's
 	// data has been written.
-	if file, err = h.fileStore.CreateFile(entry.Name, h.project.ID, dir.ID, h.user.ID, mc.GetMimeType(entry.Name)); err != nil {
+	if file, err = h.stores.FileStore.CreateFile(entry.Name, h.project.ID, dir.ID, h.user.ID, mc.GetMimeType(entry.Name)); err != nil {
 		log.Errorf("Error creating file %s in project %d, in directory %d for user %d: %s", entry.Name, h.project.ID, dir.ID, h.user.ID, err)
 		return 0, fmt.Errorf("unable to create file '%s' in dir %d for project %d: %s", entry.Name, dir.ID, h.project.ID, err)
 	}
@@ -234,16 +229,16 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 			log.Errorf("error closing file (%d) at '%s': %s", file.ID, file.ToUnderlyingFilePath(h.mcfsRoot), err)
 		}
 
-		// A file matching this files checksum already exists in the system so delete the file we just
-		// uploaded. See the call to h.fileStore.PointAtExistingIfExists towards the end of this method.
 		if deleteFile {
+			// A file matching this files checksum already exists in the system so delete the file we just
+			// uploaded. See the call to h.stores.FileStore.PointAtExistingIfExists towards the end of this method.
 			_ = os.Remove(file.ToUnderlyingFilePath(h.mcfsRoot))
 		}
 	}()
 
-	// Each file in Materials Commons has a checksum associated with it. Create a TeeReader so that as the file is
-	// read it goes to two separate destinations. One is the file we just opened, and the second is the hasher that
-	// is computing the hash.
+	// Each file in Materials Commons has a checksum associated with it. Create a TeeReader so that as the stream of
+	// bytes is read it goes to two separate destinations. One is the file we just opened, and the second is the hasher
+	// that is computing the hash.
 	hasher := md5.New()
 	teeReader := io.TeeReader(entry.Reader, hasher)
 
@@ -254,14 +249,14 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 
 	// Mark the file as current and update all the associated metadata for the file and the project.
 	checksum := fmt.Sprintf("%x", hasher.Sum(nil))
-	if err := h.fileStore.UpdateMetadataForFileAndProject(file, checksum, h.project.ID, written); err != nil {
+	if err := h.stores.FileStore.UpdateMetadataForFileAndProject(file, checksum, h.project.ID, written); err != nil {
 		log.Errorf("failure updating file (%d) and project (%d) metadata: %s", file.ID, h.project.ID, err)
 	}
 
 	// Check if there is a file with matching checksum, and if so have the file point at it and set
 	// deleteFile to true so that the defer call above that will close the file we wrote to will
 	// also delete it.
-	if switched, err := h.fileStore.PointAtExistingIfExists(file); err == nil && switched {
+	if switched, err := h.stores.FileStore.PointAtExistingIfExists(file); err == nil && switched {
 		// There was no error returned and switched is set to true. This means there was an existing
 		// file that we pointed at so the file we wrote to can be deleted.
 		deleteFile = true
@@ -271,7 +266,7 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 	// then schedule a conversion to run.
 	if file.IsConvertible() {
 		// Queue up a conversion job
-		if _, err := h.conversionStore.AddFileToConvert(file); err != nil {
+		if _, err := h.stores.ConversionStore.AddFileToConvert(file); err != nil {
 			log.Errorf("failed adding file %d to be converted: %s", file.ID, err)
 		}
 	}
@@ -351,14 +346,14 @@ func (h *mcfsHandler) loadProjectFromPathIntoHandler(path string, userID int) er
 		return fmt.Errorf("no such project %s", projectSlug)
 	}
 
-	project, err := h.projectStore.GetProjectBySlug(projectSlug)
+	project, err := h.stores.ProjectStore.GetProjectBySlug(projectSlug)
 	if err != nil {
 		log.Errorf("No such project slug %s", projectSlug)
 		return err
 	}
 
 	// Once we have the project we need to check that the user has access to the project.
-	if !h.projectStore.UserCanAccessProject(userID, project.ID) {
+	if !h.stores.ProjectStore.UserCanAccessProject(userID, project.ID) {
 		log.Errorf("User %d doesn't have access to project %d (%s)", userID, project.ID, project.Slug)
 		return fmt.Errorf("no such project %s", projectSlug)
 	}

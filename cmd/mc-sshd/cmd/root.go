@@ -15,7 +15,7 @@ import (
 	"github.com/gliderlabs/ssh"
 	mcdb "github.com/materials-commons/gomcdb"
 	"github.com/materials-commons/gomcdb/mcmodel"
-	"github.com/materials-commons/gomcdb/store"
+	"github.com/materials-commons/mc-ssh/pkg/mc"
 	"github.com/materials-commons/mc-ssh/pkg/mcscp"
 	"github.com/pkg/sftp"
 	"github.com/spf13/cobra"
@@ -60,11 +60,11 @@ const host = "localhost"
 const port = 23234
 const root = "/tmp/scp/testdata"
 
-var userStore *store.UserStore
+var stores *mc.Stores
 
 func passwordHandler(context ssh.Context, password string) bool {
 	userSlug := context.User()
-	user, err := userStore.GetUserBySlug(userSlug)
+	user, err := stores.UserStore.GetUserBySlug(userSlug)
 	if err != nil {
 		log.Errorf("Invalid user slug %q: %s", userSlug, err)
 		return false
@@ -80,98 +80,62 @@ func passwordHandler(context ssh.Context, password string) bool {
 	return true
 }
 
-func withMiddleware(middlewareList ...wish.Middleware) ssh.Handler {
-	handler := func(session ssh.Session) {}
-	for _, middleware := range middlewareList {
-		handler = middleware(handler)
-	}
-	return handler
-}
-
-func proxyMiddleware() wish.Middleware {
-	return func(handler ssh.Handler) ssh.Handler {
-		return func(session ssh.Session) {
-			cmd := session.Command()
-			if len(cmd) == 0 {
-				fmt.Println("no command")
-				return
-			}
-
-			fmt.Println("cmd = ", cmd[0])
-			if cmd[0] == "scp" {
-				//filesystemHandler := scp.NewFileSystemHandler(root)
-				//filesystemHandler(session)
-				return
-			}
-		}
-	}
-}
-
-func sftpMiddleware() wish.Middleware {
-	return func(handler ssh.Handler) ssh.Handler {
-		fmt.Println("handler for sftpMiddleware")
-		return func(session ssh.Session) {
-			fmt.Println("Starting NewRequestServer")
-			user := session.Context().Value("mcuser").(*mcmodel.User)
-			fmt.Printf("%+v\n", user)
-			if true {
-				return
-			}
-			channel := session
-			root := sftp.InMemHandler()
-			server := sftp.NewRequestServer(channel, root)
-			if err := server.Serve(); err == io.EOF {
-				server.Close()
-			} else if err != nil {
-				log.Fatalf("sftp server completed with error:", err)
-			}
-			handler(session)
-		}
-	}
-}
-
 func mcsshdMain(cmd *cobra.Command, args []string) {
+	s := mustSetupSSHServerAndServices()
+	runServer(s)
+}
+
+func mustSetupSSHServerAndServices() *ssh.Server {
 	db := mcdb.MustConnectToDB()
-	userStore = store.NewUserStore(db)
-	handler := mcscp.NewMCFSHandler(db, root)
-	//handler := scp.NewFileSystemHandler(root)
+	stores = mc.NewGormStores(db, root)
+	s := mustCreateSSHServerWithSCPHandling(stores)
+	setupSFTPSubsystem(s)
+	return s
+}
+
+func mustCreateSSHServerWithSCPHandling(stores *mc.Stores) *ssh.Server {
+	handler := mcscp.NewMCFSHandler(stores, root)
 	fmt.Println("SCP Root:", root)
 	s, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%d", host, port)),
 		wish.WithPasswordAuth(passwordHandler),
 		//wish.WithHostKeyPath(".ssh/term_info_ed25519"),
 		wish.WithMiddleware(
-			//proxyMiddleware(),
 			scp.Middleware(handler, handler),
-			//sftpMiddleware(),
 		),
 	)
+
+	if err != nil {
+		log.Fatalf("Failed creating SSH Server: %s", err)
+	}
+
+	return s
+}
+
+func setupSFTPSubsystem(s *ssh.Server) {
+	// SFTP is a subsystem, so rather than being handled as middleware we have to set
+	// the subsystem handler.
 	s.SubsystemHandlers = make(map[string]ssh.SubsystemHandler)
 	s.SubsystemHandlers["sftp"] = func(s ssh.Session) {
-		fmt.Println("sftp")
 		user := s.Context().Value("mcuser").(*mcmodel.User)
-		fmt.Printf("sftp Write: %+v\n", user)
-		if true {
-			return
-		}
+		fmt.Printf("sftp user = +%v\n", user)
 		channel := s
 		root := sftp.InMemHandler()
 		server := sftp.NewRequestServer(channel, root)
 		if err := server.Serve(); err == io.EOF {
-			server.Close()
+			_ = server.Close()
 		} else if err != nil {
 			log.Errorf("sftp server completed with error: %s", err)
 		}
 	}
-	if err != nil {
-		log.Fatalf("%s", err)
-	}
+}
 
+func runServer(s *ssh.Server) {
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	log.Infof("Starting SSH server on %s:%d", host, port)
 	go func() {
-		if err = s.ListenAndServe(); err != nil {
+		if err := s.ListenAndServe(); err != nil {
 			log.Fatalf("%s", err)
 		}
 	}()

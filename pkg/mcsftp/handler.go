@@ -20,9 +20,9 @@ import (
 )
 
 type MCStores struct {
-	fileStore       *store.FileStore
-	projectStore    *store.ProjectStore
-	conversionStore *store.ConversionStore
+	fileStore       *store.GormFileStore
+	projectStore    *store.GormProjectStore
+	conversionStore *store.GormConversionStore
 }
 
 type MCFile struct {
@@ -137,7 +137,7 @@ func (h *MCHandler) mcfileSetup(r *sftp.Request) (*MCFile, error) {
 
 	path := mc.RemoveProjectSlugFromPath(r.Filepath, project.Name)
 
-	dir, err := h.stores.fileStore.FindDirByPath(project.ID, filepath.Dir(path))
+	dir, err := h.stores.fileStore.GetDirByPath(project.ID, filepath.Dir(path))
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
@@ -194,7 +194,7 @@ func (h *MCHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 	_ = projectSlug
 
 	// hard code project for now until we add the slug to the database
-	project, err := h.stores.projectStore.FindProject(1)
+	project, err := h.stores.projectStore.GetProjectByID(1)
 	if err != nil {
 		return nil, err
 	}
