@@ -15,9 +15,45 @@ import (
 	"github.com/materials-commons/mc-ssh/pkg/mc"
 )
 
+// mcfsHandler implements the scp.CopyToClientHandler and scp.CopyFromClientHandler interfaces
+// that implement receiving and sending files/directories over SCP. A few things of note:
+//
+//    1. All the callbacks that were implemented for scp.CopyToClientHandler and scp.CopyFromClientHandler
+//       have to load the project and the user. This is done by every method calling
+//       h.loadProjectAndUserIntoHandler. Because there is no guaranteed order that the callbacks will
+//       be called in, each callback calls this method. The loadProjectAndUserIntoHandler will load the
+//       mcfsHandler.user and mcfsHandler.project fields only if they are nil. Otherwise, it just returns
+//       because these are already set. Also, loadProjectAndUserIntoHandler checks the flag
+//       mcfsHandler.fatalErrorLoadingProjectOrUser allowing it to error fast if a previous call was made
+//       and failed to load either the project or user.
+//
+//    2. The callbacks have to deal with the path. Path handling is special because the mcscp server needs
+//       to know the project that the user is writing to/reading from. The way this is handled is that the
+//       user has to encode the project in the path. Each Materials Commons project has a "slug" associated
+//       with it, which is a short unique identifier derived from the project name. When a user uses scp
+//       to upload/download files for Materials Commons, the path encodes the project slug to identify
+//       which project is being accessed. For example if the user has a project with a unique project
+//       slug of "my-project", then to specify upload/download for the project the user specifies a
+//       path that starts with /my-project. As an example the following scp command would recursively upload
+//       the directory /tmp/d3 into the project with slug 'my-project' and into it's jpegs directory:
+
+//           scp -r /tmp/d3 mc-user@materialscommons.org:/my-project/jpegs
+//
+//       When this happens the callbacks will remove the project slug from the path, so that any files or
+//       directories that are accessed/created/read/written to use the path starting with /jpegs. This
+//       path handling is done in each routine by calling mc.RemoveProjectSlugFromPath(path, h.project.Slug)
+//       where path is the original path (eg /my-project/jpegs/file.jpg), and h.project.Slug is the project
+//       slug to remove from the path (in this case 'my-project').
+//
+//    3. Each Materials Commons user also has a unique user slug. This is derived from the users email
+//       address and is how the user identifies their materials commons account. For the website the
+//       user uses their email to login. This doesn't work for scp as scp uses the @ to separate the
+//       username from the host. So for scp the user has to specify their user slug.
+//
 type mcfsHandler struct {
-	// The user is set in the context from the passwordHandler. Rather than constantly retrieving it
-	// we get it one time and set it in the mcfsHandler. See loadProjectAndUserIntoHandler for details.
+	// The user is set in the context from the passwordHandler method in cmd/mc-sshd/cmd/root. Rather than
+	// constantly retrieving it we get it one time and set it in the mcfsHandler. See
+	// loadProjectAndUserIntoHandler for details.
 	user *mcmodel.User
 
 	// The project that this scp instance is using. It gets loaded from the path the user specified. See
@@ -27,14 +63,15 @@ type mcfsHandler struct {
 	// The different stores used in the handler.
 	stores *mc.Stores
 
-	// Each call has to attempt to load the project and the user. The project and user gets loaded once in the
-	// mcfsHandler. However, it's possible that the project is invalid or there was an upstream error and the user
-	// wasn't set. Either of these are fatal errors. The loadProjectAndUserIntoHandler can error out quickly
-	// in subsequent calls if this flag is set.
+	// Each callback has to attempt to load the project and the user. The project and user gets loaded once in the
+	// mcfsHandler by loadProjectAndUserIntoHandler. However, it's possible that the project is invalid or there
+	// was an upstream error and the user wasn't set. Either of these are fatal errors. The loadProjectAndUserIntoHandler
+	// uses this flag to see if an attempt was made to load these and failed allow it to error out quickly
+	// in subsequent calls when this flag is set.
 	fatalErrorLoadingProjectOrUser bool
 
 	// This is the root where files get stored in Materials Commons. This path is needed for creating
-	// new (in the file system) files, as well as for setting up the fileStore.
+	// or reading existing files (eg calls like os.Open).
 	mcfsRoot string
 }
 
@@ -48,22 +85,31 @@ func NewMCFSHandler(stores *mc.Stores, mcfsRoot string) scp.Handler {
 
 // Implement Glob, Walkdir, NewDirEntry and NewFileEntry for the scp.CopyToClientHandler interface
 
-// Glob Don't support Glob for now...
+// Glob We don't support Glob for now...
 func (h *mcfsHandler) Glob(_ ssh.Session, pattern string) ([]string, error) {
-	fmt.Println("scp Glob:", pattern)
+	//fmt.Println("scp Glob:", pattern)
+
+	// Just return an array containing a single entry which is the pattern specified.
 	return []string{pattern}, nil
 }
 
+// WalkDir implements directory walking for SCP. It is heavily based on filepath.WalkDir and modified to
+// work with Materials Commons.
 func (h *mcfsHandler) WalkDir(s ssh.Session, path string, fn fs.WalkDirFunc) error {
 	if err := h.loadProjectAndUserIntoHandler(s, path); err != nil {
 		return err
 	}
 
 	cleanedPath := mc.RemoveProjectSlugFromPath(path, h.project.Slug)
+
+	// Get the initial directory
 	d, err := h.stores.FileStore.GetDirByPath(h.project.ID, cleanedPath)
 	if err != nil {
+		// If there was an error then pass the error to the callback (for whatever processing it
+		// will do.
 		err = fn(cleanedPath, nil, err)
 	} else {
+		// No error, so begin walking the directory we just loaded.
 		err = h.walkDir(cleanedPath, d.ToDirEntry(), fn)
 	}
 
@@ -74,7 +120,9 @@ func (h *mcfsHandler) WalkDir(s ssh.Session, path string, fn fs.WalkDirFunc) err
 	return err
 }
 
+// walkDir is where the actual recursive calls happen for directory walking.
 func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) error {
+	// Directory that was just loaded, so pass to callback and see what it does.
 	if err := fn(path, d, nil); err != nil || !d.IsDir() {
 		if err == filepath.SkipDir && d.IsDir() {
 			// Skipped directory
@@ -84,6 +132,7 @@ func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) err
 		return err
 	}
 
+	// If we are here then its time to list the directory contents and start processing them.
 	dirs, err := h.stores.FileStore.ListDirectoryByPath(h.project.ID, path)
 	if err != nil {
 		log.Errorf("Failure find path %q in project %d: %s", path, h.project.ID, err)
@@ -93,6 +142,7 @@ func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) err
 		}
 	}
 
+	// Loop through each of the retrieved directories, recursively walking them.
 	for _, dir := range dirs {
 		p := filepath.Join(path, dir.Name)
 		dirEntry := dir.ToDirEntry()
@@ -107,6 +157,7 @@ func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) err
 	return nil
 }
 
+// NewDirEntry creates a new directory entry to send back to the client where it will be (if needed) created.
 func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, error) {
 	if err := h.loadProjectAndUserIntoHandler(s, name); err != nil {
 		return nil, err
@@ -128,6 +179,9 @@ func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, er
 	}, nil
 }
 
+// NewFileEntry sends back the new file entry, and also the handle and a close function for the file. For
+// Materials Commons this means locating the real file by it's UUID (file.ToUnderlyingFilePath(mcfsRoot)),
+// and using os.Open to read it.
 func (h *mcfsHandler) NewFileEntry(s ssh.Session, name string) (*scp.FileEntry, func() error, error) {
 	if err := h.loadProjectAndUserIntoHandler(s, name); err != nil {
 		return nil, nil, err
@@ -160,7 +214,7 @@ func (h *mcfsHandler) NewFileEntry(s ssh.Session, name string) (*scp.FileEntry, 
 // Implement Mkdir and Write for the scp.CopyFromClientHandler interface
 
 // Mkdir will create missing directories in the upload. **Note** this callback is only
-// called when a recursive upload is specified. So the Write callback below also needs
+// called when a recursive upload is specified. So the Write() callback also needs
 // to handle directory creation for individual files that are being written to a
 // directory that doesn't exist.
 func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
@@ -179,7 +233,10 @@ func (h *mcfsHandler) Mkdir(s ssh.Session, entry *scp.DirEntry) error {
 
 // Write will create a new file version in the project and write the data to the physical file.
 // **Note** The Mkdir callback above is only called on recursive uploads. That means this method
-// also has to handle directory creation.
+// also has to handle directory creation. Creating a new file has a number of considerations
+// including version handling, only storing files once that share the same checksum (and instead pointing
+// at these previously uploaded files), potentially creating a web version of the file for viewing on
+// the web, updating project statistics, etc... Read the comments in the method to see the details.
 func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) {
 	var (
 		err  error
@@ -189,7 +246,9 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 
 	// After writing the file if we determine that a file matching its checksum already exists then
 	// we can delete the file just written (because we updated the file in the database to point at
-	// the file with the matching checksum)
+	// the file with the matching checksum). Assume this is not the case, but if a matching file is
+	// found then Write will set deleteFile to true. The defer method to close the opened file will
+	// then take care of deleting the file since a version with that checksum already exists.
 	deleteFile := false
 
 	if err := h.loadProjectAndUserIntoHandler(s, entry.Filepath); err != nil {
@@ -230,7 +289,7 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 		}
 
 		if deleteFile {
-			// A file matching this files checksum already exists in the system so delete the file we just
+			// A file matching this file's checksum already exists in the system so delete the file we just
 			// uploaded. See the call to h.stores.FileStore.PointAtExistingIfExists towards the end of this method.
 			_ = os.Remove(file.ToUnderlyingFilePath(h.mcfsRoot))
 		}
@@ -254,8 +313,7 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 	}
 
 	// Check if there is a file with matching checksum, and if so have the file point at it and set
-	// deleteFile to true so that the defer call above that will close the file we wrote to will
-	// also delete it.
+	// deleteFile to true so that the defer call above that closes the file will also delete it.
 	if switched, err := h.stores.FileStore.PointAtExistingIfExists(file); err == nil && switched {
 		// There was no error returned and switched is set to true. This means there was an existing
 		// file that we pointed at so the file we wrote to can be deleted.
@@ -283,33 +341,49 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 //
 // **NOTE**: This method must be called as the first thing at the top of all the implemented
 // callbacks for CopyFromClientHandler and CopyToClientHandler as the callbacks rely on
-// the user and project context.
+// the user and project fields being set.
 func (h *mcfsHandler) loadProjectAndUserIntoHandler(s ssh.Session, path string) error {
 	if h.fatalErrorLoadingProjectOrUser {
+		// A previous attempt at loading either project or user failed. This is a fatal error
+		// so that previous attempt set fatalErrorLoadingProjectOrUser to true. We respect
+		// this flag and return an error.
 		return fmt.Errorf("fatal error user or project invalid")
 	}
 
-	if err := h.loadUserFromContextIntoHandler(s); err != nil {
-		// Fatal error set fatalErrorLoadingProjectOrUser so that this method can short-circuit lookups.
-		h.fatalErrorLoadingProjectOrUser = true
-		return err
-	}
-
-	if h.project != nil {
-		// We've already retrieved it
+	// Short circuit - check if project and user have already been loaded.
+	if h.user != nil && h.project != nil {
+		// Already loaded both so nothing further to do.
 		return nil
 	}
 
-	if err := h.loadProjectFromPathIntoHandler(path, h.user.ID); err != nil {
-		// Fatal error set fatalErrorLoadingProjectOrUser so that this method can short-circuit lookups.
-		h.fatalErrorLoadingProjectOrUser = true
-		return err
+	// Check if user was already loaded.
+	if h.user == nil {
+		// h.user wasn't previously loaded so attempt to load it.
+		if err := h.loadUserFromContextIntoHandler(s); err != nil {
+			// Fatal error set fatalErrorLoadingProjectOrUser so that this method can short-circuit lookups.
+			h.fatalErrorLoadingProjectOrUser = true
+			return err
+		}
+	}
+
+	// If we are here then user is loaded, so now we handle project.
+
+	// Check if project was already loaded.
+	if h.project == nil {
+		// h.project wasn't previously loaded to attempt to load it.
+		if err := h.loadProjectFromPathIntoHandler(path, h.user.ID); err != nil {
+			// Fatal error - set fatalErrorLoadingProjectOrUser so that this method
+			// can short-circuit lookups in the future.
+			h.fatalErrorLoadingProjectOrUser = true
+			return err
+		}
 	}
 
 	return nil
 }
 
-// loadUserFromContextIntoHandler loads the user context that was set in the password handler.
+// loadUserFromContextIntoHandler loads the user context that was set in the passwordHandler method
+// in cmd/mc-sshd/cmd/root.go.
 //
 // **This method should never be called outside loadProjectAndUserIntoHandler.**
 func (h *mcfsHandler) loadUserFromContextIntoHandler(s ssh.Session) error {
@@ -317,12 +391,19 @@ func (h *mcfsHandler) loadUserFromContextIntoHandler(s ssh.Session) error {
 		// user already loaded, no need to retrieve it.
 		return nil
 	}
-	// Cache the user from the ssh.Session context into our handler. Only load this once.
+
+	// Paranoid checking to make sure there wasn't a previous attempt that set h.fatalErrorLoadingProjectOrUser
+	if h.fatalErrorLoadingProjectOrUser {
+		return fmt.Errorf("internal error no user")
+	}
+
 	var ok bool
+
+	// Cache the user from the ssh.Session context into our handler. Only load this once.
 	// See passwordHandler in cmd/mc-sshd/cmd/root for setting the "mcuser" key.
 	h.user, ok = s.Context().Value("mcuser").(*mcmodel.User)
 
-	// Make sure that we can retrieve the user and if not then set as a fatal error.
+	// Make sure that we can retrieve the user and if not then return an error.
 	if !ok {
 		return fmt.Errorf("internal error user not set")
 	}
@@ -338,15 +419,15 @@ func (h *mcfsHandler) loadUserFromContextIntoHandler(s ssh.Session) error {
 //
 // **This method should never be called outside loadProjectAndUserIntoHandler.**
 func (h *mcfsHandler) loadProjectFromPathIntoHandler(path string, userID int) error {
-	// Look up the project by the slug in the path. Each path needs to have the project slug encoded in it
-	// so that we know which project the user is accessing.
-	projectSlug := mc.GetProjectSlugFromPath(path)
-
 	if h.fatalErrorLoadingProjectOrUser {
 		// Already tried looking up the project slug and either it doesn't exist or the user
 		// didn't have access. No need to try again, just return an error.
-		return fmt.Errorf("no such project %s", projectSlug)
+		return fmt.Errorf("internal error no project")
 	}
+
+	// Look up the project by the slug in the path. Each path needs to have the project slug encoded in it
+	// so that we know which project the user is accessing.
+	projectSlug := mc.GetProjectSlugFromPath(path)
 
 	project, err := h.stores.ProjectStore.GetProjectBySlug(projectSlug)
 	if err != nil {
