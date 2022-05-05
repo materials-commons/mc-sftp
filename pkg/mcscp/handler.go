@@ -425,20 +425,9 @@ func (h *mcfsHandler) loadProjectFromPathIntoHandler(path string, userID int) er
 		return fmt.Errorf("internal error no project")
 	}
 
-	// Look up the project by the slug in the path. Each path needs to have the project slug encoded in it
-	// so that we know which project the user is accessing.
-	projectSlug := mc.GetProjectSlugFromPath(path)
-
-	project, err := h.stores.ProjectStore.GetProjectBySlug(projectSlug)
+	project, err := mc.GetProjectFromPath(path, userID, h.stores.ProjectStore)
 	if err != nil {
-		log.Errorf("No such project slug %s", projectSlug)
 		return err
-	}
-
-	// Once we have the project we need to check that the user has access to the project.
-	if !h.stores.ProjectStore.UserCanAccessProject(userID, project.ID) {
-		log.Errorf("User %d doesn't have access to project %d (%s)", userID, project.ID, project.Slug)
-		return fmt.Errorf("no such project %s", projectSlug)
 	}
 
 	// If we are here then the project exists and the user has access so set it in the handler.
