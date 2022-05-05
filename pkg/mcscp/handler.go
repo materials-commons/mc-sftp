@@ -313,16 +313,18 @@ func (h *mcfsHandler) loadProjectAndUserIntoHandler(s ssh.Session, path string) 
 //
 // **This method should never be called outside loadProjectAndUserIntoHandler.**
 func (h *mcfsHandler) loadUserFromContextIntoHandler(s ssh.Session) error {
-	// Cache the user from the ssh.Session context into our handler. Only load this once.
 	if h.user != nil {
-		var ok bool
-		// See passwordHandler in cmd/mc-sshd/cmd/root for setting the "mcuser" key.
-		h.user, ok = s.Context().Value("mcuser").(*mcmodel.User)
+		// user already loaded, no need to retrieve it.
+		return nil
+	}
+	// Cache the user from the ssh.Session context into our handler. Only load this once.
+	var ok bool
+	// See passwordHandler in cmd/mc-sshd/cmd/root for setting the "mcuser" key.
+	h.user, ok = s.Context().Value("mcuser").(*mcmodel.User)
 
-		// Make sure that we can retrieve the user and if not then set as a fatal error.
-		if !ok {
-			return fmt.Errorf("internal error user not set")
-		}
+	// Make sure that we can retrieve the user and if not then set as a fatal error.
+	if !ok {
+		return fmt.Errorf("internal error user not set")
 	}
 
 	return nil
