@@ -119,9 +119,8 @@ func setupSFTPSubsystem(s *ssh.Server) {
 	s.SubsystemHandlers["sftp"] = func(s ssh.Session) {
 		user := s.Context().Value("mcuser").(*mcmodel.User)
 		fmt.Printf("sftp user = +%v\n", user)
-		channel := s
-		root := sftp.InMemHandler()
-		server := sftp.NewRequestServer(channel, root)
+		handler := sftp.InMemHandler()
+		server := sftp.NewRequestServer(s, handler)
 		if err := server.Serve(); err == io.EOF {
 			_ = server.Close()
 		} else if err != nil {
