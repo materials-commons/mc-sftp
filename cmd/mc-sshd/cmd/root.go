@@ -15,6 +15,7 @@ import (
 	"github.com/gliderlabs/ssh"
 	mcdb "github.com/materials-commons/gomcdb"
 	"github.com/materials-commons/gomcdb/mcmodel"
+	"github.com/materials-commons/gomcdb/store"
 	"github.com/materials-commons/mc-ssh/pkg/mc"
 	"github.com/materials-commons/mc-ssh/pkg/mcscp"
 	"github.com/pkg/sftp"
@@ -61,10 +62,11 @@ const port = 23234
 const root = "/tmp/scp/testdata"
 
 var stores *mc.Stores
+var userStore store.UserStore
 
 func passwordHandler(context ssh.Context, password string) bool {
 	userSlug := context.User()
-	user, err := stores.UserStore.GetUserBySlug(userSlug)
+	user, err := userStore.GetUserBySlug(userSlug)
 	if err != nil {
 		log.Errorf("Invalid user slug %q: %s", userSlug, err)
 		return false
@@ -81,13 +83,14 @@ func passwordHandler(context ssh.Context, password string) bool {
 }
 
 func mcsshdMain(cmd *cobra.Command, args []string) {
+	db := mcdb.MustConnectToDB()
+	stores = mc.NewGormStores(db, root)
+	userStore = store.NewGormUserStore(db)
 	s := mustSetupSSHServerAndServices()
 	runServer(s)
 }
 
 func mustSetupSSHServerAndServices() *ssh.Server {
-	db := mcdb.MustConnectToDB()
-	stores = mc.NewGormStores(db, root)
 	s := mustCreateSSHServerWithSCPHandling(stores)
 	setupSFTPSubsystem(s)
 	return s
@@ -100,9 +103,7 @@ func mustCreateSSHServerWithSCPHandling(stores *mc.Stores) *ssh.Server {
 		wish.WithAddress(fmt.Sprintf("%s:%d", host, port)),
 		wish.WithPasswordAuth(passwordHandler),
 		//wish.WithHostKeyPath(".ssh/term_info_ed25519"),
-		wish.WithMiddleware(
-			scp.Middleware(handler, handler),
-		),
+		wish.WithMiddleware(scp.Middleware(handler, handler)),
 	)
 
 	if err != nil {

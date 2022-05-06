@@ -12,7 +12,6 @@ type Stores struct {
 	FileStore       store.FileStore
 	ProjectStore    store.ProjectStore
 	ConversionStore store.ConversionStore
-	UserStore       store.UserStore
 }
 
 func NewGormStores(db *gorm.DB, mcfsRoot string) *Stores {
@@ -20,6 +19,5 @@ func NewGormStores(db *gorm.DB, mcfsRoot string) *Stores {
 		FileStore:       store.NewGormFileStore(db, mcfsRoot),
 		ProjectStore:    store.NewGormProjectStore(db),
 		ConversionStore: store.NewGormConversionStore(db),
-		UserStore:       store.NewGormUserStore(db),
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/apex/log"
 	"github.com/materials-commons/gomcdb/mcmodel"
@@ -19,8 +18,9 @@ import (
 )
 
 type MCFile struct {
-	user         *mcmodel.User
-	file         *mcmodel.File
+	user *mcmodel.User
+	file *mcmodel.File
+	mcmodel.FileInfo
 	dir          *mcmodel.File
 	project      *mcmodel.Project
 	stores       *mc.Stores
@@ -33,21 +33,32 @@ type MCFile struct {
 
 type mcfsHandler struct {
 	user     *mcmodel.User
-	project  *mcmodel.Project
 	stores   *mc.Stores
 	mcfsRoot string
 
-	// Protects files
-	mu    sync.Mutex
+	// Protects files, projects, and projectsWithoutAccess
+	mu sync.Mutex
+
+	// Tracks all the files the user has opened. The key is the path with the project slug.
 	files map[string]*MCFile
+
+	// Tracks all the projects the user has accessed that they also have rights to.
+	// The key is the project slug.
+	projects map[string]*mcmodel.Project
+
+	// Tracks all the project the user has accessed that they *DO NOT* have rights to.
+	// The key is the project slug.
+	projectsWithoutAccess map[string]*mcmodel.Project
 }
 
-func NewMCHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) *mcfsHandler {
+func NewMCFSHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) *mcfsHandler {
 	return &mcfsHandler{
-		user:     user,
-		stores:   stores,
-		files:    make(map[string]*MCFile),
-		mcfsRoot: mcfsRoot,
+		user:                  user,
+		stores:                stores,
+		files:                 make(map[string]*MCFile),
+		projects:              make(map[string]*mcmodel.Project),
+		projectsWithoutAccess: make(map[string]*mcmodel.Project),
+		mcfsRoot:              mcfsRoot,
 	}
 }
 
@@ -92,6 +103,8 @@ func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
+
+	mcFile.FileInfo = mcFile.file.ToFileInfo()
 
 	openFlags := os.O_RDWR
 	if flags.Trunc {
@@ -266,30 +279,4 @@ func (f *MCFile) ReadAt(b []byte, offset int64) (int, error) {
 
 func (f *MCFile) isOpenForRead() bool {
 	return f.openForWrite == false
-}
-
-// FileInfo interface
-
-func (f *MCFile) size() int64 {
-	return f.file.ToFileInfo().Size()
-}
-
-func (f *MCFile) Name() string {
-	return f.file.ToFileInfo().Name()
-}
-
-func (f *MCFile) Mode() os.FileMode {
-	return f.file.ToFileInfo().Mode()
-}
-
-func (f *MCFile) ModTime() time.Time {
-	return f.file.ToFileInfo().ModTime()
-}
-
-func (f *MCFile) IsDir() bool {
-	return f.file.ToFileInfo().IsDir()
-}
-
-func (f *MCFile) Sys() interface{} {
-	return f.file.ToFileInfo().Sys()
 }
