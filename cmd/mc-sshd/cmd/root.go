@@ -55,12 +55,16 @@ func init() {
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	mcfsRoot = os.Getenv("MCFS_DIR")
+	if mcfsRoot == "" {
+		log.Fatalf("MCFS_DIR is unset or blank")
+	}
 }
 
 const host = "localhost"
 const port = 23234
-const root = "/tmp/scp/testdata"
 
+var mcfsRoot string
 var stores *mc.Stores
 var userStore store.UserStore
 
@@ -84,7 +88,7 @@ func passwordHandler(context ssh.Context, password string) bool {
 
 func mcsshdMain(cmd *cobra.Command, args []string) {
 	db := mcdb.MustConnectToDB()
-	stores = mc.NewGormStores(db, root)
+	stores = mc.NewGormStores(db, mcfsRoot)
 	userStore = store.NewGormUserStore(db)
 	s := mustSetupSSHServerAndServices()
 	runServer(s)
@@ -97,8 +101,8 @@ func mustSetupSSHServerAndServices() *ssh.Server {
 }
 
 func mustCreateSSHServerWithSCPHandling(stores *mc.Stores) *ssh.Server {
-	handler := mcscp.NewMCFSHandler(stores, root)
-	fmt.Println("SCP Root:", root)
+	handler := mcscp.NewMCFSHandler(stores, mcfsRoot)
+	fmt.Println("SCP Root:", mcfsRoot)
 	s, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%d", host, port)),
 		wish.WithPasswordAuth(passwordHandler),
