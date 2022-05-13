@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/apex/log"
@@ -49,7 +48,7 @@ type mcfsHandler struct {
 
 	// Tracks all the project the user has accessed that they *DO NOT* have rights to.
 	// The key is the project slug.
-	projectsWithoutAccess map[string]*mcmodel.Project
+	projectsWithoutAccess map[string]bool
 }
 
 func NewMCFSHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) *mcfsHandler {
@@ -58,7 +57,7 @@ func NewMCFSHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) *mcf
 		stores:                stores,
 		files:                 make(map[string]*MCFile),
 		projects:              make(map[string]*mcmodel.Project),
-		projectsWithoutAccess: make(map[string]*mcmodel.Project),
+		projectsWithoutAccess: make(map[string]bool),
 		mcfsRoot:              mcfsRoot,
 	}
 }
@@ -69,16 +68,17 @@ func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 		return nil, os.ErrInvalid
 	}
 
-	mcFile, err := h.mcfileSetup(r)
+	mcFile, err := h.createMCFileFromRequest(r)
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
 
-	//mcFile.file, err = h.stores.fileStore.
+	if mcFile.file, err = h.stores.FileStore.GetFileByPath(mcFile.project.ID, getPathFromRequest(r)); err != nil {
+		return nil, os.ErrNotExist
+	}
 
-	// TODO: Need to get the file
 	if mcFile.fileHandle, err = os.Open(mcFile.file.ToUnderlyingFilePath(h.mcfsRoot)); err != nil {
-		return nil, err
+		return nil, os.ErrNotExist
 	}
 
 	h.mu.Lock()
@@ -88,13 +88,18 @@ func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 	return mcFile, nil
 }
 
+func getPathFromRequest(r *sftp.Request) string {
+	projectSlug := mc.GetProjectSlugFromPath(r.Filepath)
+	return mc.RemoveProjectSlugFromPath(r.Filepath, projectSlug)
+}
+
 func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	flags := r.Pflags()
 	if !flags.Write {
 		return nil, os.ErrInvalid
 	}
 
-	mcFile, err := h.mcfileSetup(r)
+	mcFile, err := h.createMCFileFromRequest(r)
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
@@ -137,7 +142,7 @@ func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 // mcfileSetup will setup the MCFile that is used for reading/writing of files. It
 // performs the actions of determining the project, setting up paths, and similar
 // setup items needed to create a MCFile regardless of
-func (h *mcfsHandler) mcfileSetup(r *sftp.Request) (*MCFile, error) {
+func (h *mcfsHandler) createMCFileFromRequest(r *sftp.Request) (*MCFile, error) {
 	project, err := h.getProject(r)
 	if err != nil {
 		return nil, os.ErrNotExist
@@ -161,9 +166,16 @@ func (h *mcfsHandler) mcfileSetup(r *sftp.Request) (*MCFile, error) {
 }
 
 func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
+	project, err := h.getProject(r)
+	if err != nil {
+		return err
+	}
+
 	switch r.Method {
 	case "Mkdir":
-		return nil
+		path := mc.RemoveProjectSlugFromPath(r.Filepath, getPathFromRequest(r))
+		_, err := h.stores.FileStore.GetOrCreateDirPath(project.ID, h.user.ID, path)
+		return err
 	case "Rename":
 		return fmt.Errorf("unsupported command: 'Rename'")
 	case "Rmdir":
@@ -192,24 +204,35 @@ func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 }
 
 func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
-	parts := strings.Split(r.Filepath, "/")
-	// parts will be an array with the first element being an
-	// empty string. For example if the path is /my-project/this/that,
-	// then the array will be:
-	// ["", "my-project", "this", "that"]
-	// So the project slug is parts[1]
-	projectSlug := parts[1]
-	_ = projectSlug
+	var (
+		ok      bool
+		project *mcmodel.Project
+		err     error
+	)
 
-	// hard code project for now until we add the slug to the database
-	project, err := h.stores.ProjectStore.GetProjectByID(1)
-	if err != nil {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	projectSlug := mc.GetProjectSlugFromPath(r.Filepath)
+	if project, ok = h.projects[projectSlug]; ok {
+		return project, nil
+	}
+
+	if _, ok := h.projectsWithoutAccess[projectSlug]; ok {
+		return nil, fmt.Errorf("no such project: %s", projectSlug)
+	}
+
+	if project, err = h.stores.ProjectStore.GetProjectBySlug(projectSlug); err != nil {
+		h.projectsWithoutAccess[projectSlug] = true
 		return nil, err
 	}
 
 	if !h.stores.ProjectStore.UserCanAccessProject(h.user.ID, project.ID) {
-		return nil, fmt.Errorf("no such project %s", projectSlug)
+		h.projectsWithoutAccess[projectSlug] = true
+		return nil, fmt.Errorf("no such project: %s", projectSlug)
 	}
+
+	h.projects[projectSlug] = project
 
 	return project, err
 }
