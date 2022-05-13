@@ -29,6 +29,7 @@ type MCFile struct {
 	projectPath  string
 	openForWrite bool
 	hasher       hash.Hash
+	mcfsRoot     string
 }
 
 type mcfsHandler struct {
@@ -218,9 +219,17 @@ func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 // open for write. Close always returns nil, even if there was an error. Errors
 // are logged as there is nothing that can be done about an error at this point.
 func (f *MCFile) Close() error {
+	deleteFile := false
+
 	defer func() {
 		if err := f.fileHandle.Close(); err != nil {
 			log.Errorf("Error closing file %d: %s", f.file.ID, err)
+		}
+
+		if deleteFile {
+			// A file matching this file's checksum already exists in the system so delete the file we just
+			// uploaded. See the call to h.stores.FileStore.PointAtExistingIfExists towards the end of this method.
+			_ = os.Remove(f.file.ToUnderlyingFilePath(f.mcfsRoot))
 		}
 	}()
 
@@ -239,7 +248,11 @@ func (f *MCFile) Close() error {
 	}
 
 	checksum := fmt.Sprintf("%x", f.hasher.Sum(nil))
-	if err := f.stores.FileStore.UpdateMetadataForFileAndProject(f.file, checksum, f.project.ID, finfo.Size()); err != nil {
+
+	// Note deleteFile. DoneWritingToFile will switch the file if there was an existing file that had the
+	// same checksum. Here is where deleteFile gets set so that it can delete the file that was just written
+	// if this switch occurred.
+	if deleteFile, err = f.stores.FileStore.DoneWritingToFile(f.file, checksum, finfo.Size(), f.stores.ConversionStore); err != nil {
 		log.Errorf("Failure updating file (%d) and project (%d) metadata: %s", f.file.ID, f.project.ID, err)
 	}
 

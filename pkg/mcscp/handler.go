@@ -306,27 +306,12 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 		log.Errorf("failure writing to file %d: %s", file.ID, err)
 	}
 
-	// Mark the file as current and update all the associated metadata for the file and the project.
 	checksum := fmt.Sprintf("%x", hasher.Sum(nil))
-	if err := h.stores.FileStore.UpdateMetadataForFileAndProject(file, checksum, h.project.ID, written); err != nil {
-		log.Errorf("failure updating file (%d) and project (%d) metadata: %s", file.ID, h.project.ID, err)
-	}
-
-	// Check if there is a file with matching checksum, and if so have the file point at it and set
-	// deleteFile to true so that the defer call above that closes the file will also delete it.
-	if switched, err := h.stores.FileStore.PointAtExistingIfExists(file); err == nil && switched {
-		// There was no error returned and switched is set to true. This means there was an existing
-		// file that we pointed at so the file we wrote to can be deleted.
-		deleteFile = true
-	}
-
-	// Check if file type is one we do a conversion on to make viewable on the web, and if it is
-	// then schedule a conversion to run.
-	if file.IsConvertible() {
-		// Queue up a conversion job
-		if _, err := h.stores.ConversionStore.AddFileToConvert(file); err != nil {
-			log.Errorf("failed adding file %d to be converted: %s", file.ID, err)
-		}
+	// Note deleteFile. DoneWritingToFile will switch the file if there was an existing file that had the
+	// same checksum. Here is where deleteFile gets set so that it can delete the file that was just written
+	// if this switch occurred.
+	if deleteFile, err = h.stores.FileStore.DoneWritingToFile(file, checksum, written, h.stores.ConversionStore); err != nil {
+		log.Errorf("Failure updating file (%d) and project (%d) metadata: %s", file.ID, h.project.ID, err)
 	}
 
 	return written, nil

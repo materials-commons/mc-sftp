@@ -6,7 +6,7 @@ replace github.com/materials-commons/gomcdb => ../gomcdb
 
 require (
 	github.com/charmbracelet/wish v0.3.1
-	github.com/materials-commons/gomcdb v0.0.0-20220505160601-5e6263b028e6
+	github.com/materials-commons/gomcdb v0.0.0-20220510142809-bf32bce0241c
 	github.com/pkg/sftp v1.13.4
 	github.com/spf13/cobra v1.4.0
 	golang.org/x/crypto v0.0.0-20220411220226-7b82a4e95df4
