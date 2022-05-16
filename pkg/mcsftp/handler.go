@@ -192,15 +192,72 @@ func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
 }
 
 func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
+	path := mc.RemoveProjectSlugFromPath(r.Filepath, getPathFromRequest(r))
+	project, err := h.getProject(r)
+	if err != nil {
+		return nil, os.ErrNotExist
+	}
+
 	switch r.Method {
 	case "List":
+		files, err := h.stores.FileStore.ListDirectoryByPath(project.ID, path)
+		if err != nil {
+			return nil, os.ErrNotExist
+		}
+		var fileList []os.FileInfo
+		for _, f := range files {
+			fileList = append(fileList, f.ToFileInfo())
+		}
+
+		return listerat(fileList), nil
 	case "Stat":
+		file, err := h.stores.FileStore.GetFileByPath(project.ID, path)
+		if err != nil {
+			return nil, os.ErrNotExist
+		}
+		return listerat{file.ToFileInfo()}, nil
 	case "Readlink":
 		return nil, fmt.Errorf("unsupported command: 'Readlink'")
 	default:
 		return nil, fmt.Errorf("unsupport command: '%s'", r.Method)
 	}
 	return nil, nil
+}
+
+func (h *mcfsHandler) Realpath(p string) string {
+	p = filepath.ToSlash(filepath.Clean(p))
+	if !filepath.IsAbs(p) {
+		return filepath.Join("/", p)
+	}
+
+	return p
+}
+
+func (h *mcfsHandler) Lstat(r *sftp.Request) (sftp.ListerAt, error) {
+	path := mc.RemoveProjectSlugFromPath(r.Filepath, getPathFromRequest(r))
+	project, err := h.getProject(r)
+	if err != nil {
+		return nil, os.ErrNotExist
+	}
+	file, err := h.stores.FileStore.GetFileByPath(project.ID, path)
+	if err != nil {
+		return nil, os.ErrNotExist
+	}
+	return listerat{file.ToFileInfo()}, nil
+}
+
+type listerat []os.FileInfo
+
+func (f listerat) ListAt(files []os.FileInfo, offset int64) (int, error) {
+	var n int
+	if offset >= int64(len(f)) {
+		return 0, io.EOF
+	}
+	n = copy(files, f[offset:])
+	if n < len(files) {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
