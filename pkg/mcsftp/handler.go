@@ -82,18 +82,26 @@ type mcfsHandler struct {
 	projectsWithoutAccess map[string]bool
 }
 
-func NewMCFSHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) *mcfsHandler {
-	return &mcfsHandler{
+func NewMCFSHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) sftp.Handlers {
+	h := &mcfsHandler{
 		user:                  user,
 		stores:                stores,
 		projects:              make(map[string]*mcmodel.Project),
 		projectsWithoutAccess: make(map[string]bool),
 		mcfsRoot:              mcfsRoot,
 	}
+
+	return sftp.Handlers{
+		FileGet:  h,
+		FilePut:  h,
+		FileCmd:  h,
+		FileList: h,
+	}
 }
 
 // Fileread sets up read access to an existing Materials Commons file.
 func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
+	fmt.Printf("Fileread: %+v\n", r)
 	flags := r.Pflags()
 	if !flags.Read {
 		return nil, os.ErrInvalid
@@ -101,14 +109,19 @@ func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 
 	mcFile, err := h.createMCFileFromRequest(r)
 	if err != nil {
+		fmt.Println("  1")
 		return nil, os.ErrNotExist
 	}
 
 	if mcFile.file, err = h.stores.FileStore.GetFileByPath(mcFile.project.ID, getPathFromRequest(r)); err != nil {
+		fmt.Println("   2")
 		return nil, os.ErrNotExist
 	}
 
+	fmt.Println("path = ", mcFile.file.ToUnderlyingFilePath(h.mcfsRoot))
+	fmt.Printf("   for file = %+v\n", mcFile.file)
 	if mcFile.fileHandle, err = os.Open(mcFile.file.ToUnderlyingFilePath(h.mcfsRoot)); err != nil {
+		fmt.Println("   3")
 		return nil, os.ErrNotExist
 	}
 
@@ -118,6 +131,7 @@ func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 // Filewrite sets up a file for writing. It create a file or new file version in Materials Commons
 // as well as the underlying real physical file to write to.
 func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
+	fmt.Printf("Filewrite: %+v\n", r)
 	flags := r.Pflags()
 	if !flags.Write {
 		// Pathological case, Filewrite should always have the flags.Write set to true.
@@ -162,7 +176,7 @@ func (h *mcfsHandler) createMCFileFromRequest(r *sftp.Request) (*MCFile, error) 
 		return nil, os.ErrNotExist
 	}
 
-	path := mc.RemoveProjectSlugFromPath(r.Filepath, project.Name)
+	path := getPathFromRequest(r)
 
 	dir, err := h.stores.FileStore.GetDirByPath(project.ID, filepath.Dir(path))
 	if err != nil {
@@ -179,14 +193,16 @@ func (h *mcfsHandler) createMCFileFromRequest(r *sftp.Request) (*MCFile, error) 
 // Filecmd supports various SFTP commands that manipulate a file and/or filesystem. It only supports
 // Mkdir for directory creation. Deletes, renames, setting permissions, etc... are not supported.
 func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
+	fmt.Printf("Filecmd: %+v\n", r)
 	project, err := h.getProject(r)
 	if err != nil {
 		return err
 	}
 
+	path := getPathFromRequest(r)
+
 	switch r.Method {
 	case "Mkdir":
-		path := mc.RemoveProjectSlugFromPath(r.Filepath, getPathFromRequest(r))
 		_, err := h.stores.FileStore.GetOrCreateDirPath(project.ID, h.user.ID, path)
 		return err
 	case "Rename":
@@ -207,7 +223,8 @@ func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
 // Filelist handles the different SFTP file list type commands. We only support List (directory listing)
 // and Stat. Things like Readlink don't make sense for Materials Commons.
 func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
-	path := mc.RemoveProjectSlugFromPath(r.Filepath, getPathFromRequest(r))
+	fmt.Printf("\nFilelist: %+v\n", r)
+	path := getPathFromRequest(r)
 	project, err := h.getProject(r)
 	if err != nil {
 		return nil, os.ErrNotExist
@@ -230,7 +247,9 @@ func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 		if err != nil {
 			return nil, os.ErrNotExist
 		}
-		return listerat{file.ToFileInfo()}, nil
+		fi := file.ToFileInfo()
+		s := listerat{&fi}
+		return s, nil
 	case "Readlink":
 		return nil, fmt.Errorf("unsupported command: 'Readlink'")
 	default:
@@ -251,7 +270,8 @@ func (h *mcfsHandler) Realpath(p string) string {
 // Lstat returns a single entry array containing the requested file, assuming it exists. It
 // returns os.ErrNotExist if it doesn't exist.
 func (h *mcfsHandler) Lstat(r *sftp.Request) (sftp.ListerAt, error) {
-	path := mc.RemoveProjectSlugFromPath(r.Filepath, getPathFromRequest(r))
+	fmt.Printf("Lstat +%v\n", r)
+	path := getPathFromRequest(r)
 	project, err := h.getProject(r)
 	if err != nil {
 		return nil, os.ErrNotExist
@@ -260,13 +280,15 @@ func (h *mcfsHandler) Lstat(r *sftp.Request) (sftp.ListerAt, error) {
 	if err != nil {
 		return nil, os.ErrNotExist
 	}
-	return listerat{file.ToFileInfo()}, nil
+	fi := file.ToFileInfo()
+	return listerat{&fi}, nil
 }
 
 type listerat []os.FileInfo
 
 // ListAt verifies that the particular index exists in the files array.
 func (f listerat) ListAt(files []os.FileInfo, offset int64) (int, error) {
+	fmt.Println("ListAt:", offset, len(files))
 	var n int
 	if offset >= int64(len(f)) {
 		return 0, io.EOF
@@ -275,6 +297,7 @@ func (f listerat) ListAt(files []os.FileInfo, offset int64) (int, error) {
 	if n < len(files) {
 		return n, io.EOF
 	}
+
 	return n, nil
 }
 
@@ -410,5 +433,6 @@ func (f *MCFile) isOpenForRead() bool {
 // project slug.
 func getPathFromRequest(r *sftp.Request) string {
 	projectSlug := mc.GetProjectSlugFromPath(r.Filepath)
-	return mc.RemoveProjectSlugFromPath(r.Filepath, projectSlug)
+	p := mc.RemoveProjectSlugFromPath(r.Filepath, projectSlug)
+	return p
 }

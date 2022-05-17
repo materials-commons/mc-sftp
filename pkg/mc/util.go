@@ -19,7 +19,11 @@ func RemoveProjectSlugFromPath(path, projectSlug string) string {
 	sluggedNamePath := filepath.Join("/", projectSlug)
 
 	if strings.HasPrefix(cleanedPath, sluggedNamePath) {
-		return strings.TrimPrefix(cleanedPath, sluggedNamePath)
+		cleanedPath = strings.TrimPrefix(cleanedPath, sluggedNamePath)
+	}
+
+	if cleanedPath == "" {
+		return "/"
 	}
 
 	return cleanedPath

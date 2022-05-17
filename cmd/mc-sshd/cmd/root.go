@@ -18,6 +18,7 @@ import (
 	"github.com/materials-commons/gomcdb/store"
 	"github.com/materials-commons/mc-ssh/pkg/mc"
 	"github.com/materials-commons/mc-ssh/pkg/mcscp"
+	"github.com/materials-commons/mc-ssh/pkg/mcsftp"
 	"github.com/pkg/sftp"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/bcrypt"
@@ -123,9 +124,9 @@ func setupSFTPSubsystem(s *ssh.Server) {
 	s.SubsystemHandlers = make(map[string]ssh.SubsystemHandler)
 	s.SubsystemHandlers["sftp"] = func(s ssh.Session) {
 		user := s.Context().Value("mcuser").(*mcmodel.User)
-		fmt.Printf("sftp user = +%v\n", user)
-		handler := sftp.InMemHandler()
-		server := sftp.NewRequestServer(s, handler)
+		//handler := sftp.InMemHandler()
+		h := mcsftp.NewMCFSHandler(user, stores, mcfsRoot)
+		server := sftp.NewRequestServer(s, h)
 		if err := server.Serve(); err == io.EOF {
 			_ = server.Close()
 		} else if err != nil {
