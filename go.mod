@@ -3,6 +3,7 @@ module github.com/materials-commons/mc-ssh
 go 1.17
 
 replace github.com/materials-commons/gomcdb => ../gomcdb
+//replace github.com/pkg/sftp => ../../pkg/sftp
 
 require (
 	github.com/charmbracelet/wish v0.3.1
