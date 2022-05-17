@@ -135,12 +135,14 @@ func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	flags := r.Pflags()
 	if !flags.Write {
 		// Pathological case, Filewrite should always have the flags.Write set to true.
+		fmt.Println(" 1")
 		return nil, os.ErrInvalid
 	}
 
 	// Set up the initial SFTP request file state.
 	mcFile, err := h.createMCFileFromRequest(r)
 	if err != nil {
+		fmt.Println(" 2")
 		return nil, os.ErrNotExist
 	}
 
@@ -148,14 +150,19 @@ func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	fileName := filepath.Base(r.Filepath)
 	mcFile.file, err = h.stores.FileStore.CreateFile(fileName, mcFile.project.ID, mcFile.dir.ID, h.user.ID, mc.GetMimeType(fileName))
 	if err != nil {
+		fmt.Println(" 3")
 		return nil, os.ErrNotExist
 	}
 
-	// The flags don't matter, we will always open the file for create. Because files are versioned
-	// in Materials Commons there is no appending, truncating or overwriting of files.
-	openFlags := os.O_RDWR & os.O_CREATE
+	// Create the directory path where the file will be written to
+	if err := os.MkdirAll(mcFile.file.ToUnderlyingDirPath(h.mcfsRoot), 0777); err != nil {
+		fmt.Println("  4")
+		log.Errorf("Error creating directory path %s: %s", mcFile.file.ToUnderlyingDirPath(h.mcfsRoot), err)
+		return nil, os.ErrNotExist
+	}
 
-	if mcFile.fileHandle, err = os.OpenFile(mcFile.file.ToUnderlyingFilePath(h.mcfsRoot), openFlags, 0777); err != nil {
+	if mcFile.fileHandle, err = os.Create(mcFile.file.ToUnderlyingFilePath(h.mcfsRoot)); err != nil {
+		fmt.Println("  5", mcFile.file.ToUnderlyingFilePath(h.mcfsRoot), "err", err)
 		return nil, err
 	}
 
@@ -164,6 +171,7 @@ func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	mcFile.openForWrite = true
 	mcFile.hasher = md5.New()
 
+	fmt.Println(" success!")
 	return mcFile, nil
 }
 
@@ -306,6 +314,7 @@ func (f listerat) ListAt(files []os.FileInfo, offset int64) (int, error) {
 // open for write. Close always returns nil, even if there was an error. Errors
 // are logged as there is nothing that can be done about an error at this point.
 func (f *MCFile) Close() error {
+	fmt.Println("MCFile Close()")
 	deleteFile := false
 
 	defer func() {
@@ -400,6 +409,8 @@ func (f *MCFile) WriteAt(b []byte, offset int64) (int, error) {
 		n   int
 		err error
 	)
+
+	fmt.Printf("WriteAt fileHandle = %+v\n", f.fileHandle)
 
 	if n, err = f.fileHandle.WriteAt(b, offset); err != nil {
 		log.Errorf("Error writing to file %d: %s", f.file.ID, err)
