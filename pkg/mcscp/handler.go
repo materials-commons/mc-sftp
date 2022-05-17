@@ -36,7 +36,7 @@ import (
 //       slug of "my-project", then to specify upload/download for the project the user specifies a
 //       path that starts with /my-project. As an example the following scp command would recursively upload
 //       the directory /tmp/d3 into the project with slug 'my-project' and into it's jpegs directory:
-
+//
 //           scp -r /tmp/d3 mc-user@materialscommons.org:/my-project/jpegs
 //
 //       When this happens the callbacks will remove the project slug from the path, so that any files or
