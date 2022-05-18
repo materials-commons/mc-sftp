@@ -26,14 +26,10 @@ import (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "mc-sftp",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
-
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+	Use:   "mc-sshd",
+	Short: "SSH Server for Materials Commons that handles SFTP and SCP requests.",
+	Long: `mc-sshd is a custom SSH server that only implements the SFTP and SCP services. It connects
+these services to Materials Commons.`,
 	Run: mcsshdMain,
 }
 
@@ -47,19 +43,12 @@ func Execute() {
 }
 
 func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.mc-sftp.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 	mcfsRoot = os.Getenv("MCFS_DIR")
 	if mcfsRoot == "" {
 		log.Fatalf("MCFS_DIR is unset or blank")
 	}
+
+	log.Infof("MCFS Root: %s", mcfsRoot)
 }
 
 const host = "localhost"
@@ -103,7 +92,6 @@ func mustSetupSSHServerAndServices() *ssh.Server {
 
 func mustCreateSSHServerWithSCPHandling(stores *mc.Stores) *ssh.Server {
 	handler := mcscp.NewMCFSHandler(stores, mcfsRoot)
-	fmt.Println("SCP Root:", mcfsRoot)
 	s, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%d", host, port)),
 		wish.WithPasswordAuth(passwordHandler),
@@ -124,7 +112,6 @@ func setupSFTPSubsystem(s *ssh.Server) {
 	s.SubsystemHandlers = make(map[string]ssh.SubsystemHandler)
 	s.SubsystemHandlers["sftp"] = func(s ssh.Session) {
 		user := s.Context().Value("mcuser").(*mcmodel.User)
-		//handler := sftp.InMemHandler()
 		h := mcsftp.NewMCFSHandler(user, stores, mcfsRoot)
 		server := sftp.NewRequestServer(s, h)
 		if err := server.Serve(); err == io.EOF {
