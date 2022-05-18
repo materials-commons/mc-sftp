@@ -1,10 +1,8 @@
 package mcsftp
 
 import (
-	"bytes"
 	"crypto/md5"
 	"fmt"
-	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,35 +13,6 @@ import (
 	"github.com/materials-commons/mc-ssh/pkg/mc"
 	"github.com/pkg/sftp"
 )
-
-// MCFile represents a single SFTP file read or write request. It handles the ReadAt, WriteAt and Close
-// interfaces for SFTP file handling.
-type MCFile struct {
-	// file is the underlying Materials Commons file that is being accessed.
-	file *mcmodel.File
-
-	// dir is the underlying Materials Commons directory that the file (above) is in.
-	dir *mcmodel.File
-
-	// project is the Materials Commons project that the file is in.
-	project *mcmodel.Project
-
-	// stores are the various stores to update
-	stores *mc.Stores
-
-	// The real underlying handle to read/write the file.
-	fileHandle *os.File
-
-	// openForWrite is true when the file was opened for write. This is used in MCFile.Close() to
-	// determine if file statistics and checksum handling should be done.
-	openForWrite bool
-
-	// hasher tracks the checksum for files that were opened for write.
-	hasher hash.Hash
-
-	// mcfsRoot is the directory path where Materials Commons files are being read from/written to.
-	mcfsRoot string
-}
 
 // mcfsHandler represents an SFTP connection. A connection is associated with a single user. That user
 // may access multiple projects. Projects are accessed by including them in the path. Each project
@@ -82,6 +51,7 @@ type mcfsHandler struct {
 	projectsWithoutAccess map[string]bool
 }
 
+// NewMCFSHandler creates a new handler. This is called each time a user connects to the SFTP server.
 func NewMCFSHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) sftp.Handlers {
 	h := &mcfsHandler{
 		user:                  user,
@@ -101,27 +71,25 @@ func NewMCFSHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) sftp
 
 // Fileread sets up read access to an existing Materials Commons file.
 func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
-	fmt.Printf("Fileread: %+v\n", r)
 	flags := r.Pflags()
 	if !flags.Read {
+		log.Errorf("Attempt to open file %s for read, but flag not set to read", r.Filepath)
 		return nil, os.ErrInvalid
 	}
 
 	mcFile, err := h.createMCFileFromRequest(r)
 	if err != nil {
-		fmt.Println("  1")
+		log.Errorf("Unable to create MCFile: %s", err)
 		return nil, os.ErrNotExist
 	}
 
 	if mcFile.file, err = h.stores.FileStore.GetFileByPath(mcFile.project.ID, getPathFromRequest(r)); err != nil {
-		fmt.Println("   2")
+		log.Errorf("Unable to find file %s in project %d for user %d: %s", getPathFromRequest(r), mcFile.project.ID, h.user.ID, err)
 		return nil, os.ErrNotExist
 	}
 
-	fmt.Println("path = ", mcFile.file.ToUnderlyingFilePath(h.mcfsRoot))
-	fmt.Printf("   for file = %+v\n", mcFile.file)
 	if mcFile.fileHandle, err = os.Open(mcFile.file.ToUnderlyingFilePath(h.mcfsRoot)); err != nil {
-		fmt.Println("   3")
+		log.Errorf("Unable to open file %s: %s", mcFile.file.ToUnderlyingFilePath(h.mcfsRoot), err)
 		return nil, os.ErrNotExist
 	}
 
@@ -131,18 +99,17 @@ func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 // Filewrite sets up a file for writing. It create a file or new file version in Materials Commons
 // as well as the underlying real physical file to write to.
 func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
-	fmt.Printf("Filewrite: %+v\n", r)
 	flags := r.Pflags()
 	if !flags.Write {
 		// Pathological case, Filewrite should always have the flags.Write set to true.
-		fmt.Println(" 1")
+		log.Errorf("Attempt to write file %s, but write flag not set", r.Filepath)
 		return nil, os.ErrInvalid
 	}
 
 	// Set up the initial SFTP request file state.
 	mcFile, err := h.createMCFileFromRequest(r)
 	if err != nil {
-		fmt.Println(" 2")
+		log.Errorf("Error creating file: %s", err)
 		return nil, os.ErrNotExist
 	}
 
@@ -150,19 +117,18 @@ func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	fileName := filepath.Base(r.Filepath)
 	mcFile.file, err = h.stores.FileStore.CreateFile(fileName, mcFile.project.ID, mcFile.dir.ID, h.user.ID, mc.GetMimeType(fileName))
 	if err != nil {
-		fmt.Println(" 3")
+		log.Errorf("Error creating file %s for user %d in directory %d of project %d: %s", fileName, h.user.ID, mcFile.dir.ID, mcFile.project.ID, err)
 		return nil, os.ErrNotExist
 	}
 
 	// Create the directory path where the file will be written to
 	if err := os.MkdirAll(mcFile.file.ToUnderlyingDirPath(h.mcfsRoot), 0777); err != nil {
-		fmt.Println("  4")
 		log.Errorf("Error creating directory path %s: %s", mcFile.file.ToUnderlyingDirPath(h.mcfsRoot), err)
 		return nil, os.ErrNotExist
 	}
 
 	if mcFile.fileHandle, err = os.Create(mcFile.file.ToUnderlyingFilePath(h.mcfsRoot)); err != nil {
-		fmt.Println("  5", mcFile.file.ToUnderlyingFilePath(h.mcfsRoot), "err", err)
+		log.Errorf("Error creating file %s on filesystem: %s", mcFile.file.ToUnderlyingFilePath(h.mcfsRoot), err)
 		return nil, err
 	}
 
@@ -171,14 +137,13 @@ func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	mcFile.openForWrite = true
 	mcFile.hasher = md5.New()
 
-	fmt.Println(" success!")
 	return mcFile, nil
 }
 
 // createMCFileFromRequest will create a new MCFile that is used for reading/writing of files. It
 // performs the actions of determining the project, setting up paths, and similar
 // setup items needed to create a MCFile.
-func (h *mcfsHandler) createMCFileFromRequest(r *sftp.Request) (*MCFile, error) {
+func (h *mcfsHandler) createMCFileFromRequest(r *sftp.Request) (*mcfile, error) {
 	project, err := h.getProject(r)
 	if err != nil {
 		return nil, os.ErrNotExist
@@ -188,10 +153,11 @@ func (h *mcfsHandler) createMCFileFromRequest(r *sftp.Request) (*MCFile, error) 
 
 	dir, err := h.stores.FileStore.GetDirByPath(project.ID, filepath.Dir(path))
 	if err != nil {
+		log.Errorf("Error looking up directory %s in project %d: %s", filepath.Dir(path), project.ID, err)
 		return nil, os.ErrNotExist
 	}
 
-	return &MCFile{
+	return &mcfile{
 		project: project,
 		dir:     dir,
 		stores:  h.stores,
@@ -201,7 +167,6 @@ func (h *mcfsHandler) createMCFileFromRequest(r *sftp.Request) (*MCFile, error) 
 // Filecmd supports various SFTP commands that manipulate a file and/or filesystem. It only supports
 // Mkdir for directory creation. Deletes, renames, setting permissions, etc... are not supported.
 func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
-	fmt.Printf("Filecmd: %+v\n", r)
 	project, err := h.getProject(r)
 	if err != nil {
 		return err
@@ -212,6 +177,9 @@ func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
 	switch r.Method {
 	case "Mkdir":
 		_, err := h.stores.FileStore.GetOrCreateDirPath(project.ID, h.user.ID, path)
+		if err != nil {
+			log.Errorf("Unable find or create directory path %s in project %d for user %d: %s", path, project.ID, h.user.ID, err)
+		}
 		return err
 	case "Rename":
 		return fmt.Errorf("unsupported command: 'Rename'")
@@ -231,7 +199,6 @@ func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
 // Filelist handles the different SFTP file list type commands. We only support List (directory listing)
 // and Stat. Things like Readlink don't make sense for Materials Commons.
 func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
-	fmt.Printf("\nFilelist: %+v\n", r)
 	path := getPathFromRequest(r)
 	project, err := h.getProject(r)
 	if err != nil {
@@ -242,6 +209,7 @@ func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 	case "List":
 		files, err := h.stores.FileStore.ListDirectoryByPath(project.ID, path)
 		if err != nil {
+			log.Errorf("Unable to list directory %s in project %d: %s", path, project.ID, err)
 			return nil, os.ErrNotExist
 		}
 		var fileList []os.FileInfo
@@ -253,6 +221,7 @@ func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 	case "Stat":
 		file, err := h.stores.FileStore.GetFileByPath(project.ID, path)
 		if err != nil {
+			log.Errorf("Unable to lookup file %s in project %d: %s", path, project.ID, err)
 			return nil, os.ErrNotExist
 		}
 		fi := file.ToFileInfo()
@@ -278,7 +247,6 @@ func (h *mcfsHandler) Realpath(p string) string {
 // Lstat returns a single entry array containing the requested file, assuming it exists. It
 // returns os.ErrNotExist if it doesn't exist.
 func (h *mcfsHandler) Lstat(r *sftp.Request) (sftp.ListerAt, error) {
-	fmt.Printf("Lstat +%v\n", r)
 	path := getPathFromRequest(r)
 	project, err := h.getProject(r)
 	if err != nil {
@@ -286,73 +254,11 @@ func (h *mcfsHandler) Lstat(r *sftp.Request) (sftp.ListerAt, error) {
 	}
 	file, err := h.stores.FileStore.GetFileByPath(project.ID, path)
 	if err != nil {
+		log.Errorf("Unable to lookup file %s in project %d: %s", path, project.ID, err)
 		return nil, os.ErrNotExist
 	}
 	fi := file.ToFileInfo()
 	return listerat{&fi}, nil
-}
-
-type listerat []os.FileInfo
-
-// ListAt verifies that the particular index exists in the files array.
-func (f listerat) ListAt(files []os.FileInfo, offset int64) (int, error) {
-	fmt.Println("ListAt:", offset, len(files))
-	var n int
-	if offset >= int64(len(f)) {
-		return 0, io.EOF
-	}
-	n = copy(files, f[offset:])
-	if n < len(files) {
-		return n, io.EOF
-	}
-
-	return n, nil
-}
-
-// Close handles updating the metadata on a file stored in Materials Commons as well as
-// closing the underlying file handle. The metadata is only updated if the file was
-// open for write. Close always returns nil, even if there was an error. Errors
-// are logged as there is nothing that can be done about an error at this point.
-func (f *MCFile) Close() error {
-	fmt.Println("MCFile Close()")
-	deleteFile := false
-
-	defer func() {
-		if err := f.fileHandle.Close(); err != nil {
-			log.Errorf("Error closing file %d: %s", f.file.ID, err)
-		}
-
-		if deleteFile {
-			// A file matching this file's checksum already exists in the system so delete the file we just
-			// uploaded. See the call to h.stores.FileStore.PointAtExistingIfExists towards the end of this method.
-			_ = os.Remove(f.file.ToUnderlyingFilePath(f.mcfsRoot))
-		}
-	}()
-
-	if f.isOpenForRead() {
-		// If open for read then nothing to do.
-		return nil
-	}
-
-	// If we are here then the file was open for write, so lets update the metadata
-	// that Materials Commons is tracking.
-
-	finfo, err := f.fileHandle.Stat()
-	if err != nil {
-		log.Errorf("Unable to update file %d metadata: %s", f.file.ID, err)
-		return nil
-	}
-
-	checksum := fmt.Sprintf("%x", f.hasher.Sum(nil))
-
-	// Note deleteFile. DoneWritingToFile will switch the file if there was an existing file that had the
-	// same checksum. Here is where deleteFile gets set so that it can delete the file that was just written
-	// if this switch occurred.
-	if deleteFile, err = f.stores.FileStore.DoneWritingToFile(f.file, checksum, finfo.Size(), f.stores.ConversionStore); err != nil {
-		log.Errorf("Failure updating file (%d) and project (%d) metadata: %s", f.file.ID, f.project.ID, err)
-	}
-
-	return nil
 }
 
 // getProject retrieves the project from the path. The r.Filepath contains the project slug as
@@ -376,10 +282,14 @@ func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 
 	projectSlug := mc.GetProjectSlugFromPath(r.Filepath)
 	if project, ok = h.projects[projectSlug]; ok {
+		// Found project in the projects cache so just return it
 		return project, nil
 	}
 
 	if _, ok := h.projectsWithoutAccess[projectSlug]; ok {
+		// Found project slug in projectsWithoutAccess. This means we tried looking this
+		// slug up in the past and it either didn't exist or the user didn't have access
+		// to the project.
 		return nil, fmt.Errorf("no such project: %s", projectSlug)
 	}
 
@@ -400,44 +310,6 @@ func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 	h.projects[projectSlug] = project
 
 	return project, err
-}
-
-// WriteAt takes care of writing to the file and updating the hasher that is
-// incrementally creating the checksum.
-func (f *MCFile) WriteAt(b []byte, offset int64) (int, error) {
-	var (
-		n   int
-		err error
-	)
-
-	fmt.Printf("WriteAt fileHandle = %+v\n", f.fileHandle)
-
-	if n, err = f.fileHandle.WriteAt(b, offset); err != nil {
-		log.Errorf("Error writing to file %d: %s", f.file.ID, err)
-		return n, err
-	}
-
-	if _, err = io.Copy(f.hasher, bytes.NewBuffer(b[:n])); err != nil {
-		log.Errorf("Error updating the checksum for file %d: %s", f.file.ID, err)
-	}
-
-	return n, nil
-}
-
-// ReadAt reads from the underlying handle. It's just a pass through to the file handle
-// ReadAt plus a bit of extra error logging.
-func (f *MCFile) ReadAt(b []byte, offset int64) (int, error) {
-	n, err := f.fileHandle.ReadAt(b, offset)
-	if err != nil {
-		log.Errorf("Error reading from file %d: %s", f.file.ID, err)
-	}
-
-	return n, err
-}
-
-// isOpenForRead returns true if the file was opened for read. It exists for readability purposes.
-func (f *MCFile) isOpenForRead() bool {
-	return f.openForWrite == false
 }
 
 // getPathFromRequest will get the path to the file from the request after it removes the
