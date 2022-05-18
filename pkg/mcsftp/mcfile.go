@@ -2,6 +2,7 @@ package mcsftp
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -65,7 +66,7 @@ func (f *mcfile) WriteAt(b []byte, offset int64) (int, error) {
 // ReadAt plus a bit of extra error logging.
 func (f *mcfile) ReadAt(b []byte, offset int64) (int, error) {
 	n, err := f.fileHandle.ReadAt(b, offset)
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
 		log.Errorf("Error reading from file %d: %s", f.file.ID, err)
 	}
 
@@ -82,7 +83,6 @@ func (f *mcfile) isOpenForRead() bool {
 // open for write. Close always returns nil, even if there was an error. Errors
 // are logged as there is nothing that can be done about an error at this point.
 func (f *mcfile) Close() error {
-	fmt.Println(" Close()")
 	deleteFile := false
 
 	defer func() {
