@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/apex/log"
 	"github.com/materials-commons/gomcdb/mcmodel"
@@ -199,6 +200,44 @@ func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
 // Filelist handles the different SFTP file list type commands. We only support List (directory listing)
 // and Stat. Things like Readlink don't make sense for Materials Commons.
 func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
+	if r.Filepath == "/" && r.Method == "List" {
+		// Root path listing, so build a list of project stubs that the user has access to. Treat each
+		// of these as a directory in the root.
+		projects, err := h.stores.ProjectStore.GetProjectsForUser(h.user.ID)
+		if err != nil {
+			return nil, fmt.Errorf("unable to get list of projects: %s", err)
+		}
+
+		var projectList []os.FileInfo
+
+		// Go through each project creating a fake file (directory) that is the project slug
+		for _, project := range projects {
+			f := mcmodel.File{
+				Name:      project.Slug,
+				MimeType:  "directory",
+				Size:      uint64(project.Size),
+				Path:      filepath.Join("/", project.Slug),
+				UpdatedAt: project.UpdatedAt,
+			}
+			projectList = append(projectList, f.ToFileInfo())
+		}
+
+		return listerat(projectList), nil
+	}
+
+	if r.Filepath == "/" && r.Method == "Stat" {
+		// Stat of root path so create a fake one so there is no error
+		f := mcmodel.File{
+			Name:      "/",
+			MimeType:  "directory",
+			Size:      0,
+			Path:      "/",
+			UpdatedAt: time.Now(),
+		}
+		return listerat{f.ToFileInfo()}, nil
+	}
+
+	// If we are here then we are in a project path context, so do the usual steps to retrieve the project
 	path := getPathFromRequest(r)
 	project, err := h.getProject(r)
 	if err != nil {
@@ -212,12 +251,13 @@ func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 			log.Errorf("Unable to list directory %s in project %d: %s", path, project.ID, err)
 			return nil, os.ErrNotExist
 		}
+
 		var fileList []os.FileInfo
 		for _, f := range files {
 			fileList = append(fileList, f.ToFileInfo())
 		}
-
 		return listerat(fileList), nil
+
 	case "Stat":
 		file, err := h.stores.FileStore.GetFileByPath(project.ID, path)
 		if err != nil {
@@ -227,6 +267,7 @@ func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 		fi := file.ToFileInfo()
 		s := listerat{&fi}
 		return s, nil
+
 	case "Readlink":
 		return nil, fmt.Errorf("unsupported command: 'Readlink'")
 	default:
