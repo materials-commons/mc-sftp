@@ -5,6 +5,7 @@ import (
 	"os"
 )
 
+// listerat is an array of objects that implement the os.FileInfo interface
 type listerat []os.FileInfo
 
 // ListAt verifies that the particular index exists in the files array.
