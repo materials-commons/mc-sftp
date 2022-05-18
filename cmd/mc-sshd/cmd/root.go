@@ -68,7 +68,6 @@ func passwordHandler(context ssh.Context, password string) bool {
 	}
 
 	if err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
-		log.Errorf("Invalid password")
 		return false
 	}
 
