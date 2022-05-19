@@ -22,6 +22,7 @@ import (
 	"github.com/materials-commons/mc-ssh/pkg/mcsftp"
 	"github.com/pkg/sftp"
 	"github.com/spf13/cobra"
+	"github.com/subosito/gotenv"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -44,20 +45,85 @@ func Execute() {
 }
 
 func init() {
+	dotenvFilePath := os.Getenv("MC_DOTENV_PATH")
+	if dotenvFilePath == "" {
+		log.Fatalf("MC_DOTENV_PATH not set or blank")
+	}
+
+	if err := gotenv.Load(dotenvFilePath); err != nil {
+		log.Fatalf("Loading %s failed: %s", dotenvFilePath, err)
+	}
 	mcfsRoot = os.Getenv("MCFS_DIR")
 	if mcfsRoot == "" {
-		log.Fatalf("MCFS_DIR is unset or blank")
+		log.Fatalf("MCFS_DIR is not set or blank")
 	}
 
 	log.Infof("MCFS Root: %s", mcfsRoot)
+
+	if mcsshdPort = os.Getenv("MCSSHD_PORT"); mcsshdPort == "" {
+		log.Fatalf("MCSSHD_PORT is not set or blank")
+	}
+
+	if mcsshdHost = os.Getenv("MCSSHD_HOST"); mcsshdHost == "" {
+		log.Fatalf("MCSSHD_HOST is not set or blank")
+	}
 }
 
-const host = "localhost"
-const port = 23234
-
 var mcfsRoot string
-var stores *mc.Stores
 var userStore store.UserStore
+var mcsshdHost string
+var mcsshdPort string
+
+func mcsshdMain(cmd *cobra.Command, args []string) {
+	db := mcdb.MustConnectToDB()
+	stores := mc.NewGormStores(db, mcfsRoot)
+	userStore = store.NewGormUserStore(db)
+	handler := mcscp.NewMCFSHandler(stores, mcfsRoot)
+
+	// Setup SSH server and SCP Middleware handler
+	s, err := wish.NewServer(
+		wish.WithAddress(fmt.Sprintf("%s:%s", mcsshdHost, mcsshdPort)),
+		wish.WithPasswordAuth(passwordHandler),
+		//wish.WithHostKeyPath(".ssh/term_info_ed25519"),
+		wish.WithMiddleware(scp.Middleware(handler, handler)),
+	)
+
+	if err != nil {
+		log.Fatalf("Failed creating SSH Server: %s", err)
+	}
+
+	// SFTP is a subsystem, so rather than being handled as middleware we have to set
+	// the subsystem handler.
+	s.SubsystemHandlers = make(map[string]ssh.SubsystemHandler)
+	s.SubsystemHandlers["sftp"] = func(s ssh.Session) {
+		user := s.Context().Value("mcuser").(*mcmodel.User)
+		h := mcsftp.NewMCFSHandler(user, stores, mcfsRoot)
+		server := sftp.NewRequestServer(s, h)
+		if err := server.Serve(); err == io.EOF {
+			_ = server.Close()
+		} else if err != nil {
+			log.Errorf("sftp server completed with error: %s", err)
+		}
+	}
+
+	// Run server
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	log.Infof("Starting SSH server on %s:%s", mcsshdHost, mcsshdPort)
+	go func() {
+		if err := s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+			log.Fatalf("%s", err)
+		}
+	}()
+
+	<-done
+	log.Info("Stopping SSH server")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer func() { cancel() }()
+	if err := s.Shutdown(ctx); err != nil {
+		log.Fatalf("Error shutting down SSH Server: %s", err)
+	}
+}
 
 func passwordHandler(context ssh.Context, password string) bool {
 	userSlug := context.User()
@@ -74,69 +140,4 @@ func passwordHandler(context ssh.Context, password string) bool {
 	context.SetValue("mcuser", user)
 
 	return true
-}
-
-func mcsshdMain(cmd *cobra.Command, args []string) {
-	db := mcdb.MustConnectToDB()
-	stores = mc.NewGormStores(db, mcfsRoot)
-	userStore = store.NewGormUserStore(db)
-	s := mustSetupSSHServerAndServices()
-	runServer(s)
-}
-
-func mustSetupSSHServerAndServices() *ssh.Server {
-	s := mustCreateSSHServerWithSCPHandling(stores)
-	setupSFTPSubsystem(s)
-	return s
-}
-
-func mustCreateSSHServerWithSCPHandling(stores *mc.Stores) *ssh.Server {
-	handler := mcscp.NewMCFSHandler(stores, mcfsRoot)
-	s, err := wish.NewServer(
-		wish.WithAddress(fmt.Sprintf("%s:%d", host, port)),
-		wish.WithPasswordAuth(passwordHandler),
-		//wish.WithHostKeyPath(".ssh/term_info_ed25519"),
-		wish.WithMiddleware(scp.Middleware(handler, handler)),
-	)
-
-	if err != nil {
-		log.Fatalf("Failed creating SSH Server: %s", err)
-	}
-
-	return s
-}
-
-func setupSFTPSubsystem(s *ssh.Server) {
-	// SFTP is a subsystem, so rather than being handled as middleware we have to set
-	// the subsystem handler.
-	s.SubsystemHandlers = make(map[string]ssh.SubsystemHandler)
-	s.SubsystemHandlers["sftp"] = func(s ssh.Session) {
-		user := s.Context().Value("mcuser").(*mcmodel.User)
-		h := mcsftp.NewMCFSHandler(user, stores, mcfsRoot)
-		server := sftp.NewRequestServer(s, h)
-		if err := server.Serve(); err == io.EOF {
-			_ = server.Close()
-		} else if err != nil {
-			log.Errorf("sftp server completed with error: %s", err)
-		}
-	}
-}
-
-func runServer(s *ssh.Server) {
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-	log.Infof("Starting SSH server on %s:%d", host, port)
-	go func() {
-		if err := s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
-			log.Fatalf("%s", err)
-		}
-	}()
-
-	<-done
-	log.Info("Stopping SSH server")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer func() { cancel() }()
-	if err := s.Shutdown(ctx); err != nil {
-		log.Fatalf("%s", err)
-	}
 }
