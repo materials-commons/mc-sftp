@@ -2,12 +2,12 @@ module github.com/materials-commons/mc-ssh
 
 go 1.17
 
-replace github.com/materials-commons/gomcdb => ../gomcdb
+//replace github.com/materials-commons/gomcdb => ../gomcdb
 //replace github.com/pkg/sftp => ../../pkg/sftp
 
 require (
 	github.com/charmbracelet/wish v0.3.1
-	github.com/materials-commons/gomcdb v0.0.0-20220510142809-bf32bce0241c
+	github.com/materials-commons/gomcdb v0.0.0-20220518200930-49279820a134
 	github.com/pkg/sftp v1.13.4
 	github.com/spf13/cobra v1.4.0
 	golang.org/x/crypto v0.0.0-20220411220226-7b82a4e95df4
