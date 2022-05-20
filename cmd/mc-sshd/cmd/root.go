@@ -44,6 +44,12 @@ func Execute() {
 	}
 }
 
+var mcfsRoot string
+var userStore store.UserStore
+var mcsshdHost string
+var mcsshdPort string
+var mcsshdHostkeyPath string
+
 func init() {
 	dotenvFilePath := os.Getenv("MC_DOTENV_PATH")
 	if dotenvFilePath == "" {
@@ -54,25 +60,41 @@ func init() {
 		log.Fatalf("Loading %s failed: %s", dotenvFilePath, err)
 	}
 	mcfsRoot = os.Getenv("MCFS_DIR")
+	incompleteConfiguration := false
 	if mcfsRoot == "" {
-		log.Fatalf("MCFS_DIR is not set or blank")
+		log.Errorf("MCFS_DIR is not set or blank")
+		incompleteConfiguration = true
 	}
 
 	log.Infof("MCFS Root: %s", mcfsRoot)
 
 	if mcsshdPort = os.Getenv("MCSSHD_PORT"); mcsshdPort == "" {
-		log.Fatalf("MCSSHD_PORT is not set or blank")
+		log.Errorf("MCSSHD_PORT is not set or blank")
+		incompleteConfiguration = true
 	}
 
 	if mcsshdHost = os.Getenv("MCSSHD_HOST"); mcsshdHost == "" {
-		log.Fatalf("MCSSHD_HOST is not set or blank")
+		log.Errorf("MCSSHD_HOST is not set or blank")
+		incompleteConfiguration = true
+	}
+
+	mcsshdHostkeyPath = os.Getenv("MCSSHD_HOST_KEY_PATH")
+
+	switch {
+	case mcsshdHostkeyPath == "":
+		log.Errorf("MCSSHD_HOST_KEY_PATH is not set or blank")
+		incompleteConfiguration = true
+	default:
+		if _, err := os.Stat(mcsshdHostkeyPath); err != nil {
+			log.Errorf("MCSSHD_HOST_KEY_PATH file (%s) does not exist: %s", mcsshdHostkeyPath, err)
+			incompleteConfiguration = true
+		}
+	}
+
+	if incompleteConfiguration {
+		log.Fatalf("One or more required variables not configured, exiting.")
 	}
 }
-
-var mcfsRoot string
-var userStore store.UserStore
-var mcsshdHost string
-var mcsshdPort string
 
 func mcsshdMain(cmd *cobra.Command, args []string) {
 	db := mcdb.MustConnectToDB()
@@ -84,7 +106,7 @@ func mcsshdMain(cmd *cobra.Command, args []string) {
 	s, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%s", mcsshdHost, mcsshdPort)),
 		wish.WithPasswordAuth(passwordHandler),
-		//wish.WithHostKeyPath(".ssh/term_info_ed25519"),
+		wish.WithHostKeyPath(".ssh/does-not-exist"),
 		wish.WithMiddleware(scp.Middleware(handler, handler)),
 	)
 
