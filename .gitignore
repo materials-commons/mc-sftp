@@ -19,3 +19,4 @@
 cmd/mc-sftpd/mc-sftpd
 cmd/mc-sshd/mc-sshd
 id_rsa*
+.ssh
