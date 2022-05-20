@@ -51,22 +51,22 @@ var mcsshdPort string
 var mcsshdHostkeyPath string
 
 func init() {
+	incompleteConfiguration := false
+
 	dotenvFilePath := os.Getenv("MC_DOTENV_PATH")
 	if dotenvFilePath == "" {
 		log.Fatalf("MC_DOTENV_PATH not set or blank")
 	}
 
 	if err := gotenv.Load(dotenvFilePath); err != nil {
-		log.Fatalf("Loading %s failed: %s", dotenvFilePath, err)
+		log.Fatalf("Failed loading configuration file %s: %s", dotenvFilePath, err)
 	}
+
 	mcfsRoot = os.Getenv("MCFS_DIR")
-	incompleteConfiguration := false
 	if mcfsRoot == "" {
 		log.Errorf("MCFS_DIR is not set or blank")
 		incompleteConfiguration = true
 	}
-
-	log.Infof("MCFS Root: %s", mcfsRoot)
 
 	if mcsshdPort = os.Getenv("MCSSHD_PORT"); mcsshdPort == "" {
 		log.Errorf("MCSSHD_PORT is not set or blank")
@@ -94,6 +94,8 @@ func init() {
 	if incompleteConfiguration {
 		log.Fatalf("One or more required variables not configured, exiting.")
 	}
+
+	log.Infof("MCFS Root: %s", mcfsRoot)
 }
 
 func mcsshdMain(cmd *cobra.Command, args []string) {
@@ -106,7 +108,7 @@ func mcsshdMain(cmd *cobra.Command, args []string) {
 	s, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%s", mcsshdHost, mcsshdPort)),
 		wish.WithPasswordAuth(passwordHandler),
-		wish.WithHostKeyPath(".ssh/does-not-exist"),
+		wish.WithHostKeyPath(mcsshdHostkeyPath),
 		wish.WithMiddleware(scp.Middleware(handler, handler)),
 	)
 
