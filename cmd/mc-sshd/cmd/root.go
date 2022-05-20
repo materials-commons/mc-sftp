@@ -102,9 +102,9 @@ func mcsshdMain(cmd *cobra.Command, args []string) {
 	db := mcdb.MustConnectToDB()
 	stores := mc.NewGormStores(db, mcfsRoot)
 	userStore = store.NewGormUserStore(db)
-	handler := mcscp.NewMCFSHandler(stores, mcfsRoot)
 
 	// Setup SSH server and SCP Middleware handler
+	handler := mcscp.NewMCFSHandler(stores, mcfsRoot)
 	s, err := wish.NewServer(
 		wish.WithAddress(fmt.Sprintf("%s:%s", mcsshdHost, mcsshdPort)),
 		wish.WithPasswordAuth(passwordHandler),
