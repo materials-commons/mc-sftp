@@ -312,7 +312,6 @@ func (h *mcfsHandler) Lstat(r *sftp.Request) (sftp.ListerAt, error) {
 // project cache (mcfsHandler.projects or mcfsHandler.projectsWithoutAccess).
 func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 	var (
-		ok      bool
 		project *mcmodel.Project
 		err     error
 	)
@@ -322,29 +321,10 @@ func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 	defer h.mu.Unlock()
 
 	projectSlug := mc.GetProjectSlugFromPath(r.Filepath)
-	if project, ok = h.projects[projectSlug]; ok {
-		// Found project in the projects cache so just return it
-		return project, nil
-	}
 
-	if _, ok := h.projectsWithoutAccess[projectSlug]; ok {
-		// Found project slug in projectsWithoutAccess. This means we tried looking this
-		// slug up in the past and it either didn't exist or the user didn't have access
-		// to the project.
-		return nil, fmt.Errorf("no such project: %s", projectSlug)
-	}
-
-	// If we are here then we haven't seen this project slug before.
-	if project, err = h.stores.ProjectStore.GetProjectBySlug(projectSlug); err != nil {
-		// Can't find it so treat as no access
+	if project, err = mc.GetAndValidateProjectFromPath(r.Filepath, h.user.ID, h.stores.ProjectStore); err != nil {
+		// Error looking up or validating access. Mark this
 		h.projectsWithoutAccess[projectSlug] = true
-		return nil, err
-	}
-
-	if !h.stores.ProjectStore.UserCanAccessProject(h.user.ID, project.ID) {
-		// Found it but user doesn't have access to it.
-		h.projectsWithoutAccess[projectSlug] = true
-		return nil, fmt.Errorf("no such project: %s", projectSlug)
 	}
 
 	// Found the project and user has access so put in the projects cache.

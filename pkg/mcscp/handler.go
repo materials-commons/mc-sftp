@@ -404,14 +404,17 @@ func (h *mcfsHandler) loadUserFromContextIntoHandler(s ssh.Session) error {
 //
 // **This method should never be called outside loadProjectAndUserIntoHandler.**
 func (h *mcfsHandler) loadProjectFromPathIntoHandler(path string, userID int) error {
+	var (
+		project *mcmodel.Project
+		err     error
+	)
 	if h.fatalErrorLoadingProjectOrUser {
 		// Already tried looking up the project slug and either it doesn't exist or the user
 		// didn't have access. No need to try again, just return an error.
 		return fmt.Errorf("internal error no project")
 	}
 
-	project, err := mc.GetProjectFromPath(path, userID, h.stores.ProjectStore)
-	if err != nil {
+	if project, err = mc.GetAndValidateProjectFromPath(path, userID, h.stores.ProjectStore); err != nil {
 		return err
 	}
 
