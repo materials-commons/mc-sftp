@@ -61,10 +61,10 @@ func GetMimeType(name string) string {
 	return strings.TrimSpace(mimeType[:semicolon])
 }
 
-// GetProjectFromPath retrieves the project by extracting the project slug from the path, and asking
+// GetAndValidateProjectFromPath retrieves the project by extracting the project slug from the path, and asking
 // the project store for that project. It also validates that the userID passed in has access to
 // the project.
-func GetProjectFromPath(path string, userID int, projectStore store.ProjectStore) (*mcmodel.Project, error) {
+func GetAndValidateProjectFromPath(path string, userID int, projectStore store.ProjectStore) (*mcmodel.Project, error) {
 	// Look up the project by the slug in the path. Each path needs to have the project slug encoded in it
 	// so that we know which project the user is accessing.
 	projectSlug := GetProjectSlugFromPath(path)
