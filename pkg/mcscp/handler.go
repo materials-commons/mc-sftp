@@ -307,7 +307,7 @@ func (h *mcfsHandler) Write(s ssh.Session, entry *scp.FileEntry) (int64, error) 
 	}
 
 	checksum := fmt.Sprintf("%x", hasher.Sum(nil))
-	// Note deleteFile. DoneWritingToFile will switch the file if there was an existing file that had the
+	// Note deleteFile in the if statement - DoneWritingToFile will switch the file if there was an existing file that had the
 	// same checksum. Here is where deleteFile gets set so that it can delete the file that was just written
 	// if this switch occurred.
 	if deleteFile, err = h.stores.FileStore.DoneWritingToFile(file, checksum, written, h.stores.ConversionStore); err != nil {

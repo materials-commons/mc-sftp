@@ -40,7 +40,7 @@ type mcfsHandler struct {
 	// mcfsRoot is the directory path where Materials Commons files are being read from/written to.
 	mcfsRoot string
 
-	// Protects files, projects, and projectsWithoutAccess
+	// Protects projects, and projectsWithoutAccess
 	mu sync.Mutex
 
 	// Tracks all the projects the user has accessed that they also have rights to.
