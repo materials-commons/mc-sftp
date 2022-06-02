@@ -97,7 +97,7 @@ func (h *mcfsHandler) Fileread(r *sftp.Request) (io.ReaderAt, error) {
 	return mcFile, nil
 }
 
-// Filewrite sets up a file for writing. It create a file or new file version in Materials Commons
+// Filewrite sets up a file for writing. It creates a file or new file version in Materials Commons
 // as well as the underlying real physical file to write to.
 func (h *mcfsHandler) Filewrite(r *sftp.Request) (io.WriterAt, error) {
 	flags := r.Pflags()
