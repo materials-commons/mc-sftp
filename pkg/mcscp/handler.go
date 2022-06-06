@@ -158,6 +158,8 @@ func (h *mcfsHandler) walkDir(path string, d fs.DirEntry, fn fs.WalkDirFunc) err
 }
 
 // NewDirEntry creates a new directory entry to send back to the client where it will be (if needed) created.
+// The directory needs to exist in Materials Commons. NewDirEntry doesn't create directories on the server
+// it sends back existing directories to the client.
 func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, error) {
 	if err := h.loadProjectAndUserIntoHandler(s, name); err != nil {
 		return nil, err
