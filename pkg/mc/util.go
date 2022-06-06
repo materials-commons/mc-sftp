@@ -29,8 +29,7 @@ func RemoveProjectSlugFromPath(path, projectSlug string) string {
 	return cleanedPath
 }
 
-// GetProjectSlugFromPath extracts the project slug from the
-// beginning of the path. For example /my-project/this/that
+// GetProjectSlugFromPath extracts the project slug from the beginning of the path. For example /my-project/this/that
 // has a project slug of "my-project".
 func GetProjectSlugFromPath(path string) string {
 	parts := strings.Split(path, "/")
@@ -44,7 +43,7 @@ func GetProjectSlugFromPath(path string) string {
 	return projectSlug
 }
 
-// GetMimeType will determine the type of a file from its extension. It strips out the extra information
+// GetMimeType will determine the type of file from its extension. It strips out the extra information
 // such as the charset and just returns the underlying type. It returns "unknown" for the mime type if
 // the mime package is unable to determine the type.
 func GetMimeType(name string) string {
