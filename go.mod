@@ -3,13 +3,14 @@ module github.com/materials-commons/mc-ssh
 go 1.17
 
 //replace github.com/materials-commons/gomcdb => ../gomcdb
+
 //replace github.com/pkg/sftp => ../../pkg/sftp
 
 require (
 	github.com/apex/log v1.9.0
 	github.com/charmbracelet/wish v0.3.1
 	github.com/gliderlabs/ssh v0.3.3
-	github.com/materials-commons/gomcdb v0.0.0-20220518200930-49279820a134
+	github.com/materials-commons/gomcdb v0.0.0-20220606160145-d6fd4df50269
 	github.com/pkg/sftp v1.13.4
 	github.com/spf13/cobra v1.4.0
 	github.com/subosito/gotenv v1.2.0
@@ -33,5 +34,5 @@ require (
 	github.com/pkg/errors v0.8.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	golang.org/x/sys v0.0.0-20210630005230-0f9fa26af87c // indirect
-	gorm.io/driver/mysql v1.3.3 // indirect
+	gorm.io/driver/mysql v1.3.4 // indirect
 )
