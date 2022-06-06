@@ -28,13 +28,13 @@ import (
 //    it from the path so specify the underlying Materials Commons path.
 //
 // 2. Because a user can access many files, which could be in different projects, we don't want to
-//    continuously look up projects. The mcfsHandler caches projects that were already looked up
-//    so they can be quickly returned these are cached by project slug. It also caches failed projects
-//    either because the project-slug didn't exist or the user didn't have access to the project.
-//
+//    continuously look up projects. The mcfsHandler caches projects that were already looked up.
+//    These are cached by project slug. It also caches failed projects either because the
+//   project-slug didn't exist or the user didn't have access to the project.
 type mcfsHandler struct {
 	// user is the Materials Commons user for this SFTP session.
-	user   *mcmodel.User
+	user *mcmodel.User
+
 	stores *mc.Stores
 
 	// mcfsRoot is the directory path where Materials Commons files are being read from/written to.
@@ -42,11 +42,13 @@ type mcfsHandler struct {
 
 	// Tracks all the projects the user has accessed that they also have rights to.
 	// The key is the project slug.
-	projects sync.Map // map[string]*mcmodel.Project
+	// If this were a map it would look like: map[string]*mcmodel.Project
+	projects sync.Map
 
 	// Tracks all the project the user has accessed that they *DO NOT* have rights to.
 	// The key is the project slug.
-	projectsWithoutAccess sync.Map // map[string]bool
+	// If this were a map it would look like: map[string]bool
+	projectsWithoutAccess sync.Map
 }
 
 // NewMCFSHandler creates a new handler. This is called each time a user connects to the SFTP server.
