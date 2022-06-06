@@ -40,26 +40,21 @@ type mcfsHandler struct {
 	// mcfsRoot is the directory path where Materials Commons files are being read from/written to.
 	mcfsRoot string
 
-	// Protects projects, and projectsWithoutAccess
-	mu sync.Mutex
-
 	// Tracks all the projects the user has accessed that they also have rights to.
 	// The key is the project slug.
-	projects map[string]*mcmodel.Project
+	projects sync.Map // map[string]*mcmodel.Project
 
 	// Tracks all the project the user has accessed that they *DO NOT* have rights to.
 	// The key is the project slug.
-	projectsWithoutAccess map[string]bool
+	projectsWithoutAccess sync.Map // map[string]bool
 }
 
 // NewMCFSHandler creates a new handler. This is called each time a user connects to the SFTP server.
 func NewMCFSHandler(user *mcmodel.User, stores *mc.Stores, mcfsRoot string) sftp.Handlers {
 	h := &mcfsHandler{
-		user:                  user,
-		stores:                stores,
-		projects:              make(map[string]*mcmodel.Project),
-		projectsWithoutAccess: make(map[string]bool),
-		mcfsRoot:              mcfsRoot,
+		user:     user,
+		stores:   stores,
+		mcfsRoot: mcfsRoot,
 	}
 
 	return sftp.Handlers{
@@ -311,40 +306,49 @@ func (h *mcfsHandler) Lstat(r *sftp.Request) (sftp.ListerAt, error) {
 // lookup is successful also check access) done. The lookup will fill out the appropriate
 // project cache (mcfsHandler.projects or mcfsHandler.projectsWithoutAccess).
 func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
-	var (
-		project *mcmodel.Project
-		err     error
-		ok      bool
-	)
-
 	projectSlug := mc.GetProjectSlugFromPath(r.Filepath)
 
-	// Protect access to the two project caches.
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	// Check if we previously found this project.
-	if project, ok = h.projects[projectSlug]; ok {
-		return project, nil
+	if proj, ok := h.projects.Load(projectSlug); ok {
+		// Paranoid check - Make sure that the item returned is a *mcmodel.Project
+		// and return an error if it isn't.
+		p, okCast := proj.(*mcmodel.Project)
+		if !okCast {
+			// Bug - The item stored in h.projects is not a *mcmodel.Project, so delete
+			// it and return an error saying we can't find the project. Also set the
+			// projectSlug in h.projectsWithoutAccess so, we don't just continually try
+			// to load this.
+			h.projects.Delete(projectSlug)
+			h.projectsWithoutAccess.Store(projectSlug, true)
+			log.Errorf("error casting to project for slug %s", projectSlug)
+			return nil, fmt.Errorf("no such project: %s", projectSlug)
+		}
+
+		return p, nil
 	}
 
 	// Check if we tried to load the project in the past and failed.
-	if _, ok = h.projectsWithoutAccess[projectSlug]; ok {
+	if _, ok := h.projectsWithoutAccess.Load(projectSlug); ok {
 		return nil, fmt.Errorf("no such project: %s", projectSlug)
 	}
 
 	// If we are here then we've never tried loading the project.
 
+	var (
+		project *mcmodel.Project
+		err     error
+	)
+
 	if project, err = mc.GetAndValidateProjectFromPath(r.Filepath, h.user.ID, h.stores.ProjectStore); err != nil {
 		// Error looking up or validating access. Mark this project slug as invalid.
-		h.projectsWithoutAccess[projectSlug] = true
+		h.projectsWithoutAccess.Store(projectSlug, true)
 		return nil, err
 	}
 
 	// Found the project and user has access so put in the projects cache.
-	h.projects[projectSlug] = project
+	h.projects.Store(projectSlug, project)
 
-	return project, err
+	return project, nil
 }
 
 // getPathFromRequest will get the path to the file from the request after it removes the
