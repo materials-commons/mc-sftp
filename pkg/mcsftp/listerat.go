@@ -17,8 +17,8 @@ func (f listerat) ListAt(files []os.FileInfo, offset int64) (int, error) {
 
 	n := copy(files, f[offset:])
 	if n < len(files) {
-		// Number copied all the remaining entries in f, so nothing left
-		// to copy after this. So return io.EOF to signal this
+		// The number copied is all the remaining entries in f, so nothing left
+		// to copy after this. So return io.EOF to signal this.
 		return n, io.EOF
 	}
 
