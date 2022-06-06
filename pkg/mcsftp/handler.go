@@ -314,17 +314,31 @@ func (h *mcfsHandler) getProject(r *sftp.Request) (*mcmodel.Project, error) {
 	var (
 		project *mcmodel.Project
 		err     error
+		ok      bool
 	)
+
+	projectSlug := mc.GetProjectSlugFromPath(r.Filepath)
 
 	// Protect access to the two project caches.
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	projectSlug := mc.GetProjectSlugFromPath(r.Filepath)
+	// Check if we previously found this project.
+	if project, ok = h.projects[projectSlug]; ok {
+		return project, nil
+	}
+
+	// Check if we tried to load the project in the past and failed.
+	if _, ok = h.projectsWithoutAccess[projectSlug]; ok {
+		return nil, fmt.Errorf("no such project: %s", projectSlug)
+	}
+
+	// If we are here then we've never tried loading the project.
 
 	if project, err = mc.GetAndValidateProjectFromPath(r.Filepath, h.user.ID, h.stores.ProjectStore); err != nil {
-		// Error looking up or validating access. Mark this
+		// Error looking up or validating access. Mark this project slug as invalid.
 		h.projectsWithoutAccess[projectSlug] = true
+		return nil, err
 	}
 
 	// Found the project and user has access so put in the projects cache.
