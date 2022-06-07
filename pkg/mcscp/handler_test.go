@@ -24,11 +24,28 @@ func TestMcfsHandler_NewDirEntry(t *testing.T) {
 	stores := makeStoresWithFakes()
 	handler := NewMCFSHandler(stores, "/tmp")
 	session := newFakeSshSession()
+	tests := []struct {
+		tname      string
+		path       string
+		shouldFail bool
+	}{
+		{"Test Project/Dir exist", "/proj/dir1", false},
+		{"Test project does not exist", "/proj-not-exist/dir1", true},
+		{"Test project exists, dir does not exist", "/proj/dir-not-exist", true},
+	}
 
-	dirEntry, err := handler.NewDirEntry(session, "/proj/dir1")
-
-	require.Nil(t, err, "NewDirEntry unexpected returned err: %s for directory /proj/dir1", err)
-	require.NotNil(t, dirEntry, "NewDirEntry succeeded but returned nil for the DirEntry")
+	for _, test := range tests {
+		t.Run(test.tname, func(t *testing.T) {
+			dirEntry, err := handler.NewDirEntry(session, test.path)
+			if test.shouldFail {
+				require.NotNil(t, err, "NewDirEntry unexpectedly passed, should have errored for path %s", test.path)
+				require.Nil(t, dirEntry, "NewDirEntry correctly failed but dirEntry should be nil for path %s", test.path)
+			} else {
+				require.Nil(t, err, "NewDirEntry should have succeeded, but got err %s for path %s", err, test.path)
+				require.NotNil(t, dirEntry, "NewDirentry succeeded but returned nil for dirEntry for path %s", test.path)
+			}
+		})
+	}
 }
 
 func TestMcfsHandler_NewFileEntry(t *testing.T) {
