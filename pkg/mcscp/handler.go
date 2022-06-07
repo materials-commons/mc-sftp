@@ -183,7 +183,8 @@ func (h *mcfsHandler) NewDirEntry(s ssh.Session, name string) (*scp.DirEntry, er
 
 // NewFileEntry sends back the new file entry, and also the handle and a close function for the file. For
 // Materials Commons this means locating the real file by it's UUID (file.ToUnderlyingFilePath(mcfsRoot)),
-// and using os.Open to read it.
+// and using os.Open to read it. NewFileEntry doesn't create a file on the server. It sends back to the
+// client an existing file.
 func (h *mcfsHandler) NewFileEntry(s ssh.Session, name string) (*scp.FileEntry, func() error, error) {
 	if err := h.loadProjectAndUserIntoHandler(s, name); err != nil {
 		return nil, nil, err
