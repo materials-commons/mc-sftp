@@ -197,6 +197,11 @@ func (h *mcfsHandler) Filecmd(r *sftp.Request) error {
 // Filelist handles the different SFTP file list type commands. We only support List (directory listing)
 // and Stat. Things like Readlink don't make sense for Materials Commons.
 func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
+	// The reason this check for the filepath and method isn't done in the case statement below
+	// when matching on "List" for the method is that this is a specialized case, where the user
+	// is looking at /, and there isn't a project, so we need to build a list of projects and return
+	// that list to be presented as directories off of /. The code after this if block assumes that
+	// the user is already in a project, and is looking up the project in the path.
 	if r.Filepath == "/" && r.Method == "List" {
 		// Root path listing, so build a list of project stubs that the user has access to. Treat each
 		// of these as a directory in the root.
@@ -234,7 +239,9 @@ func (h *mcfsHandler) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
 		return listerat{f.ToFileInfo()}, nil
 	}
 
-	// If we are here then we are in a project path context, so do the usual steps to retrieve the project
+	// If we are here then we are in a project path context, so do the usual steps to retrieve the project. That
+	// is the user isn't looking at "/", but is looking at something like "/my-project". So we can look at the
+	// path and check out its project context.
 	path := getPathFromRequest(r)
 	project, err := h.getProject(r)
 	if err != nil {
