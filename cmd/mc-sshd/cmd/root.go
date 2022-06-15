@@ -161,6 +161,13 @@ func passwordHandler(context ssh.Context, password string) bool {
 		return false
 	}
 
+	// Set up the context that will be used in SCP.
+	sessionContext := mcscp.NewSessionContext(user)
+	context.SetValue("mcSessionContext", sessionContext)
+
+	// mcuser is used by SFTP. It could also have used the scp session context, but
+	// since that is specifically needed by the mcscp handler, a separate value
+	// is set for the sftp handler. This prevents mixing of concerns and dependencies.
 	context.SetValue("mcuser", user)
 
 	return true

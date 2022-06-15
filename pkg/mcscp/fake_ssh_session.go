@@ -19,7 +19,8 @@ type fakeSSHSession struct {
 
 func newFakeSshSession() fakeSSHSession {
 	u := &mcmodel.User{Slug: "testslug", ID: 1}
-	return fakeSSHSession{c: context.WithValue(context.Background(), "mcuser", u)}
+	sc := NewSessionContext(u)
+	return fakeSSHSession{c: context.WithValue(context.Background(), "mcSessionContext", sc)}
 }
 
 // User returns the username used when establishing the SSH connection.
