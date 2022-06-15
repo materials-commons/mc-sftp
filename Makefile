@@ -10,6 +10,8 @@ fmt:
 
 bin: server
 
+build: server
+
 server:
 	(cd ./cmd/mc-sshd; go build)
 
